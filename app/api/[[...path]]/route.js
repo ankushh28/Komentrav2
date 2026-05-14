@@ -206,11 +206,19 @@ async function handleListMedia(req) {
   const db = await getDb();
   const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId });
   if (!acct) return json({ error: 'Account not found' }, 404);
-  const mediaUrl = `https://graph.instagram.com/${API_VERSION}/${acct.instagramUserId}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&limit=25&access_token=${acct.accessToken}`;
-  const r = await fetch(mediaUrl);
-  const d = await r.json();
-  if (!r.ok) return json({ error: d.error || 'failed to fetch media' }, 500);
-  return json({ media: d.data || [] });
+  try {
+    const mediaUrl = `https://graph.instagram.com/v22.0/me/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&limit=25&access_token=${encodeURIComponent(acct.accessToken)}`;
+    const r = await fetch(mediaUrl);
+    const d = await r.json();
+    console.log('IG media response', r.status, JSON.stringify(d).slice(0, 500));
+    if (!r.ok) {
+      return json({ error: d.error?.message || 'failed to fetch media', details: d }, 500);
+    }
+    return json({ media: d.data || [] });
+  } catch (e) {
+    console.error('media fetch error', e);
+    return json({ error: e.message }, 500);
+  }
 }
 
 // ----------- AUTOMATIONS -----------
