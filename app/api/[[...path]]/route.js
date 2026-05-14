@@ -259,9 +259,16 @@ async function handleCreateAutomation(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const body = await req.json();
-  const { instagramAccountId, postId, postPermalink, postThumbnail, triggerWord, replyMessage, dmMessage } = body;
-  if (!instagramAccountId || !postId || !triggerWord || !replyMessage || !dmMessage) {
-    return json({ error: 'missing fields' }, 400);
+  const {
+    instagramAccountId, postId, postPermalink, postThumbnail,
+    keywords, matchType, replyMessages, dmText, dmButtons,
+    askToFollow, followMessage, igUsername, name,
+  } = body;
+  const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : [];
+  const cleanReplies = Array.isArray(replyMessages) ? replyMessages.map(s => String(s).trim()).filter(Boolean).slice(0, 3) : [];
+  const cleanButtons = Array.isArray(dmButtons) ? dmButtons.filter(b => b && b.title && b.url).slice(0, 3) : [];
+  if (!instagramAccountId || !postId || cleanKeywords.length === 0 || cleanReplies.length === 0 || !dmText) {
+    return json({ error: 'Missing fields. Need at least 1 keyword, 1 reply variant and a DM message.' }, 400);
   }
   const db = await getDb();
   const doc = {
@@ -271,11 +278,21 @@ async function handleCreateAutomation(req) {
     postId,
     postPermalink: postPermalink || null,
     postThumbnail: postThumbnail || null,
-    triggerWord: triggerWord.toLowerCase().trim(),
-    replyMessage,
-    dmMessage,
+    name: name || cleanKeywords[0],
+    keywords: cleanKeywords,
+    matchType: ['exact', 'contains', 'starts_with'].includes(matchType) ? matchType : 'contains',
+    replyMessages: cleanReplies,
+    dmText: String(dmText),
+    dmButtons: cleanButtons,
+    askToFollow: !!askToFollow,
+    followMessage: askToFollow ? (followMessage || `Follow @${igUsername || ''} first to unlock this!`) : null,
+    igUsername: igUsername || null,
     isActive: true,
     createdAt: new Date(),
+    // legacy fields for back-compat
+    triggerWord: cleanKeywords[0],
+    replyMessage: cleanReplies[0],
+    dmMessage: String(dmText),
   };
   await db.collection('automations').insertOne(doc);
   return json({ automation: doc });
@@ -389,13 +406,32 @@ async function handleWebhookEvent(req) {
               isActive: true,
             }).toArray();
             for (const auto of automations) {
-              if (commentText.includes(auto.triggerWord)) {
-                console.log(`Matched trigger '${auto.triggerWord}' on comment '${commentText}'`);
-                // Reply to comment
-                const r1 = await replyToComment(acct.accessToken, commentId, auto.replyMessage);
+              const keywords = (auto.keywords && auto.keywords.length) ? auto.keywords : (auto.triggerWord ? [auto.triggerWord] : []);
+              const matchType = auto.matchType || 'contains';
+              if (matchesKeyword(commentText, keywords, matchType)) {
+                console.log(`Matched keywords ${JSON.stringify(keywords)} (${matchType}) on comment '${commentText}'`);
+                // Pick random reply variant
+                const replies = (auto.replyMessages && auto.replyMessages.length) ? auto.replyMessages : [auto.replyMessage];
+                const reply = replies[Math.floor(Math.random() * replies.length)];
+                const r1 = await replyToComment(acct.accessToken, commentId, reply);
                 console.log('Reply result', r1);
-                // Send DM
-                const r2 = await sendDM(acct.accessToken, igUserId, commentId, auto.dmMessage);
+
+                // Optional: send follow-prompt message first
+                let rFollow = null;
+                if (auto.askToFollow && auto.followMessage) {
+                  rFollow = await sendDMText(acct.accessToken, igUserId, commentId, auto.followMessage);
+                  console.log('Follow-prompt DM', rFollow);
+                }
+
+                // Main DM: with buttons if any, else plain text
+                const dmText = auto.dmText || auto.dmMessage || '';
+                const buttons = Array.isArray(auto.dmButtons) ? auto.dmButtons.filter(b => b.title && b.url).slice(0, 3) : [];
+                let r2;
+                if (buttons.length > 0) {
+                  r2 = await sendDMButtons(acct.accessToken, igUserId, commentId, dmText, buttons);
+                } else {
+                  r2 = await sendDMText(acct.accessToken, igUserId, commentId, dmText);
+                }
                 console.log('DM result', r2);
 
                 await db.collection('automation_runs').insertOne({
@@ -404,7 +440,9 @@ async function handleWebhookEvent(req) {
                   commentId,
                   fromUserId: fromId,
                   commentText: v.text,
+                  replyUsed: reply,
                   replyResult: r1,
+                  followResult: rFollow,
                   dmResult: r2,
                   ranAt: new Date(),
                 });
