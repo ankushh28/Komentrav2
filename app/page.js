@@ -307,6 +307,36 @@ function Dashboard({ token, user, onLogout }) {
     }
   };
 
+  const resubscribe = async (id) => {
+    toast.loading('Re-subscribing to webhooks...', { id: 'sub' });
+    const res = await fetch(`/api/instagram/accounts/${id}/resubscribe`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (res.ok) {
+      toast.success('Webhook subscription active!', { id: 'sub' });
+    } else {
+      toast.error(`Failed: ${data.error || 'unknown'}`, { id: 'sub' });
+      console.error('Subscribe failed', data);
+    }
+  };
+
+  const checkSub = async (id) => {
+    const res = await fetch(`/api/instagram/accounts/${id}/subscription`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    const subscribed = Array.isArray(data.data?.data) && data.data.data.length > 0;
+    if (subscribed) {
+      const fields = data.data.data[0].subscribed_fields?.join(', ') || 'none';
+      toast.success(`Subscribed to: ${fields}`);
+    } else {
+      toast.warning('Not subscribed yet. Click the refresh icon to subscribe.');
+    }
+    console.log('Subscription status:', data);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-rose-50/30 to-fuchsia-50/30">
       {/* Header */}
@@ -351,9 +381,17 @@ function Dashboard({ token, user, onLogout }) {
                         <p className="text-xs text-muted-foreground">{a.accountType || 'Business'}</p>
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon" onClick={() => disconnectAccount(a.id)}>
-                      <Trash2 className="w-4 h-4 text-rose-500" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" title="Check webhook subscription" onClick={() => checkSub(a.id)}>
+                        <Activity className="w-4 h-4 text-emerald-600" />
+                      </Button>
+                      <Button variant="ghost" size="icon" title="Re-subscribe to webhooks" onClick={() => resubscribe(a.id)}>
+                        <RefreshCw className="w-4 h-4 text-blue-600" />
+                      </Button>
+                      <Button variant="ghost" size="icon" title="Disconnect" onClick={() => disconnectAccount(a.id)}>
+                        <Trash2 className="w-4 h-4 text-rose-500" />
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               ))}

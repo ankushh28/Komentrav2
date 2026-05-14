@@ -197,6 +197,39 @@ async function handleDisconnect(req, accountId) {
   return json({ success: true });
 }
 
+async function handleResubscribe(req, accountId) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const db = await getDb();
+  const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId });
+  if (!acct) return json({ error: 'Account not found' }, 404);
+  try {
+    const subUrl = `https://graph.instagram.com/v22.0/me/subscribed_apps`;
+    const subForm = new URLSearchParams();
+    subForm.set('subscribed_fields', 'comments,messages,live_comments,message_reactions');
+    subForm.set('access_token', acct.accessToken);
+    const r = await fetch(subUrl, { method: 'POST', body: subForm });
+    const d = await r.json();
+    console.log('Re-subscribe result', d);
+    if (!r.ok) return json({ error: d.error?.message || 'subscribe failed', details: d }, 500);
+    return json({ success: true, data: d });
+  } catch (e) {
+    return json({ error: e.message }, 500);
+  }
+}
+
+async function handleCheckSubscription(req, accountId) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const db = await getDb();
+  const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId });
+  if (!acct) return json({ error: 'Account not found' }, 404);
+  const url = `https://graph.instagram.com/v22.0/me/subscribed_apps?access_token=${encodeURIComponent(acct.accessToken)}`;
+  const r = await fetch(url);
+  const d = await r.json();
+  return json({ status: r.status, data: d });
+}
+
 async function handleListMedia(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
@@ -407,6 +440,14 @@ async function dispatch(req, params, method) {
   if (path.startsWith('/instagram/accounts/') && method === 'DELETE') {
     const id = path.split('/')[3];
     return handleDisconnect(req, id);
+  }
+  if (path.startsWith('/instagram/accounts/') && path.endsWith('/resubscribe') && method === 'POST') {
+    const id = path.split('/')[3];
+    return handleResubscribe(req, id);
+  }
+  if (path.startsWith('/instagram/accounts/') && path.endsWith('/subscription') && method === 'GET') {
+    const id = path.split('/')[3];
+    return handleCheckSubscription(req, id);
   }
 
   // Automations
