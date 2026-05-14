@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Instagram, LogOut, Plus, Trash2, Zap, MessageSquare, Send, Sparkles, CheckCircle2, ExternalLink } from 'lucide-react';
+import { Instagram, LogOut, Plus, Trash2, Zap, MessageSquare, Send, Sparkles, CheckCircle2, ExternalLink, RefreshCw, Activity } from 'lucide-react';
 
 function Logo() {
   return (
