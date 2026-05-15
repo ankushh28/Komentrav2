@@ -547,24 +547,43 @@ async function sendDM(accessToken, igUserId, recipientId, message) {
   return { ok: r.ok, data: d };
 }
 
+function summarizeWebhook(body) {
+  const entries = Array.isArray(body?.entry) ? body.entry : [];
+  return {
+    object: body?.object || null,
+    entries: entries.length,
+    entryIds: entries.map(e => e.id).filter(Boolean),
+    changes: entries.reduce((sum, e) => sum + (Array.isArray(e.changes) ? e.changes.length : 0), 0),
+    messaging: entries.reduce((sum, e) => sum + (Array.isArray(e.messaging) ? e.messaging.length : 0), 0),
+    changeFields: entries.flatMap(e => (e.changes || []).map(c => c.field)).filter(Boolean),
+  };
+}
+
 async function handleWebhookEvent(req) {
   const rawBody = await req.text();
   let body;
   try { body = JSON.parse(rawBody); } catch (e) { return new NextResponse('bad json', { status: 400 }); }
-  console.log('Webhook event received, enqueuing');
+  const summary = summarizeWebhook(body);
+  console.log('[webhook] event received', JSON.stringify(summary));
 
   // Best-effort raw archive (non-blocking)
   try {
     const db = await getDb();
-    db.collection('webhook_events').insertOne({ _id: uuidv4(), receivedAt: new Date(), payload: body }).catch(() => {});
-  } catch {}
+    db.collection('webhook_events').insertOne({ _id: uuidv4(), receivedAt: new Date(), payload: body })
+      .then(() => console.log('[webhook] archived event'))
+      .catch((e) => console.error('[webhook] archive error', e?.message));
+  } catch (e) {
+    console.error('[webhook] archive setup error', e?.message);
+  }
 
   // Push to BullMQ for async processing — return 200 immediately to Meta
   try {
     const q = getQueue();
-    await q.add('event', body, { jobId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+    const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const job = await q.add('event', body, { jobId });
+    console.log('[webhook] enqueued event', JSON.stringify({ jobId: job.id, ...summary }));
   } catch (e) {
-    console.error('queue error', e?.message);
+    console.error('[webhook] queue error', e?.message);
   }
 
   return new NextResponse('EVENT_RECEIVED', { status: 200 });

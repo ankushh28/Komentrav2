@@ -112,14 +112,50 @@ function matchesKeyword(text, keywords, matchType) {
   });
 }
 
+function textPreview(value, max = 120) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function logAutomation(scope, message, details = {}) {
+  try {
+    console.log(`[worker][${scope}] ${message}`, JSON.stringify(details));
+  } catch {
+    console.log(`[worker][${scope}] ${message}`);
+  }
+}
+
+function graphError(result) {
+  return result?.data?.error?.message || result?.data?.error?.code || null;
+}
+
 // ---- Job processor ----
 async function processJob(job) {
   const body = job.data;
   const dbi = await db();
-  if (body.object !== 'instagram' || !Array.isArray(body.entry)) return;
+  logAutomation('job', 'received', {
+    jobId: job.id,
+    object: body?.object,
+    entries: Array.isArray(body?.entry) ? body.entry.length : 0,
+  });
+
+  if (body.object !== 'instagram' || !Array.isArray(body.entry)) {
+    logAutomation('job', 'ignored unsupported webhook payload', {
+      jobId: job.id,
+      object: body?.object,
+      hasEntryArray: Array.isArray(body?.entry),
+    });
+    return;
+  }
 
   for (const entry of body.entry) {
     const igUserId = String(entry.id);
+    logAutomation('entry', 'processing instagram entry', {
+      jobId: job.id,
+      igUserId,
+      changes: (entry.changes || []).length,
+      messaging: (entry.messaging || []).length,
+    });
 
     // Comments
     for (const change of entry.changes || []) {
@@ -129,24 +165,72 @@ async function processJob(job) {
       const commentId = v.id;
       const mediaId = v.media?.id || v.media_id;
       const fromId = v.from?.id;
-      if (!commentId || !mediaId) continue;
+      if (!commentId || !mediaId) {
+        logAutomation('comment-dm', 'skipped comment event missing ids', {
+          jobId: job.id,
+          commentId: commentId || null,
+          mediaId: mediaId || null,
+        });
+        continue;
+      }
+
+      logAutomation('comment-dm', 'comment event received', {
+        jobId: job.id,
+        mediaId,
+        commentId,
+        fromId: fromId || null,
+        text: textPreview(v.text),
+      });
 
       const automations = await dbi.collection('automations').find({
         postId: mediaId, isActive: true,
       }).toArray();
+      logAutomation('comment-dm', 'active automations loaded for post', {
+        jobId: job.id,
+        mediaId,
+        count: automations.length,
+      });
       if (automations.length === 0) continue;
 
       const acct = await dbi.collection('instagram_accounts').findOne({ _id: automations[0].instagramAccountId });
-      if (!acct) continue;
+      if (!acct) {
+        logAutomation('comment-dm', 'skipped because instagram account was not found', {
+          jobId: job.id,
+          instagramAccountId: automations[0].instagramAccountId,
+        });
+        continue;
+      }
 
       for (const auto of automations) {
         const keywords = auto.keywords?.length ? auto.keywords : (auto.triggerWord ? [auto.triggerWord] : []);
         const matchType = auto.matchType || 'contains';
-        if (!matchesKeyword(commentText, keywords, matchType)) continue;
+        const matched = matchesKeyword(commentText, keywords, matchType);
+        logAutomation('comment-dm', 'automation keyword check', {
+          jobId: job.id,
+          automationId: auto._id,
+          automationName: auto.name || null,
+          keywords,
+          matchType,
+          matched,
+        });
+        if (!matched) continue;
 
         const replies = auto.replyMessages?.length ? auto.replyMessages : [auto.replyMessage];
+        if (!replies.filter(Boolean).length) {
+          logAutomation('comment-dm', 'skipped matched automation with no reply messages', {
+            jobId: job.id,
+            automationId: auto._id,
+          });
+          continue;
+        }
         const reply = replies[Math.floor(Math.random() * replies.length)];
         const r1 = await replyToComment(acct.accessToken, commentId, reply);
+        logAutomation('comment-dm', 'public reply attempted', {
+          jobId: job.id,
+          automationId: auto._id,
+          ok: r1.ok,
+          error: graphError(r1),
+        });
 
         let rDM = null;
         if (auto.askToFollow) {
@@ -162,6 +246,13 @@ async function processJob(job) {
             ? await sendDMButtons(acct.accessToken, { comment_id: commentId }, dmText, buttons)
             : await sendDMText(acct.accessToken, { comment_id: commentId }, dmText);
         }
+        logAutomation('comment-dm', 'dm attempted', {
+          jobId: job.id,
+          automationId: auto._id,
+          flow: auto.askToFollow ? 'follow-gated' : 'direct',
+          ok: rDM?.ok,
+          error: graphError(rDM),
+        });
 
         await dbi.collection('automation_runs').insertOne({
           _id: uuidv4(),
@@ -180,19 +271,57 @@ async function processJob(job) {
     // Postbacks (I Followed) and DM auto-replies
     for (const msg of entry.messaging || []) {
       // Skip echoes (our own outgoing messages re-delivered as webhooks)
-      if (msg.message?.is_echo) continue;
+      if (msg.message?.is_echo) {
+        logAutomation('messaging', 'skipped echo message', {
+          jobId: job.id,
+          igUserId,
+          mid: msg.message?.mid || null,
+        });
+        continue;
+      }
 
       const senderId = msg.sender?.id;
+      logAutomation('messaging', 'message event received', {
+        jobId: job.id,
+        igUserId,
+        senderId: senderId || null,
+        hasText: !!msg.message?.text,
+        text: textPreview(msg.message?.text),
+        hasPostback: !!msg.postback?.payload,
+        postbackPayload: msg.postback?.payload || null,
+      });
 
       // 1) Handle "I Followed" postback button
       if (msg.postback?.payload?.startsWith('RP_FOLLOW:') && senderId) {
         const automationId = msg.postback.payload.slice('RP_FOLLOW:'.length);
         const auto = await dbi.collection('automations').findOne({ _id: automationId });
-        if (!auto || !auto.isActive) continue;
+        if (!auto || !auto.isActive) {
+          logAutomation('follow-gate', 'skipped inactive or missing automation', {
+            jobId: job.id,
+            automationId,
+            found: !!auto,
+            isActive: !!auto?.isActive,
+          });
+          continue;
+        }
         const acct = await dbi.collection('instagram_accounts').findOne({ _id: auto.instagramAccountId });
-        if (!acct) continue;
+        if (!acct) {
+          logAutomation('follow-gate', 'skipped because instagram account was not found', {
+            jobId: job.id,
+            automationId,
+            instagramAccountId: auto.instagramAccountId,
+          });
+          continue;
+        }
 
         const followCheck = await checkUserFollowsBusiness(acct.accessToken, senderId);
+        logAutomation('follow-gate', 'follow check completed', {
+          jobId: job.id,
+          automationId,
+          senderId,
+          isFollowing: followCheck.isFollowing,
+          ok: followCheck.ok,
+        });
         if (!followCheck.isFollowing) {
           const retry = await sendFollowPrompt(
             acct.accessToken, { id: senderId },
@@ -227,6 +356,13 @@ async function processJob(job) {
       // 2) DM AUTO-REPLY: a regular incoming DM with text
       const incomingText = msg.message?.text;
       if (incomingText && senderId) {
+        logAutomation('dm-auto-reply', 'checking incoming dm text', {
+          jobId: job.id,
+          igUserId,
+          senderId,
+          text: textPreview(incomingText),
+        });
+
         // Find the connected account for this IG user (try both ID formats)
         const acct = await dbi.collection('instagram_accounts').findOne({
           $or: [
@@ -235,27 +371,68 @@ async function processJob(job) {
           ],
         });
         if (!acct) {
-          console.log('[worker] no account for messaging entry.id', igUserId);
+          logAutomation('dm-auto-reply', 'no connected instagram account found for messaging entry', {
+            jobId: job.id,
+            igUserId,
+            senderId,
+          });
           continue;
         }
+        logAutomation('dm-auto-reply', 'connected account matched', {
+          jobId: job.id,
+          igUserId,
+          instagramAccountId: acct._id,
+          username: acct.username || null,
+        });
 
         const automations = await dbi.collection('automations').find({
           instagramAccountId: acct._id,
           type: 'dm_reply',
           isActive: true,
         }).toArray();
+        logAutomation('dm-auto-reply', 'active dm automations loaded', {
+          jobId: job.id,
+          instagramAccountId: acct._id,
+          count: automations.length,
+        });
+        if (automations.length === 0) continue;
 
         for (const auto of automations) {
           const keywords = auto.keywords || [];
-          if (!matchesKeyword(incomingText.toLowerCase(), keywords, auto.matchType || 'contains')) continue;
+          const matchType = auto.matchType || 'contains';
+          const matched = matchesKeyword(incomingText.toLowerCase(), keywords, matchType);
+          logAutomation('dm-auto-reply', 'automation keyword check', {
+            jobId: job.id,
+            automationId: auto._id,
+            automationName: auto.name || null,
+            keywords,
+            matchType,
+            matched,
+          });
+          if (!matched) continue;
 
           const replies = auto.replyMessages || [];
+          if (!replies.filter(Boolean).length) {
+            logAutomation('dm-auto-reply', 'skipped matched automation with no reply messages', {
+              jobId: job.id,
+              automationId: auto._id,
+            });
+            continue;
+          }
           const reply = replies[Math.floor(Math.random() * replies.length)];
           const replyButtons = (auto.replyButtons || []).filter(b => b.title && b.url).slice(0, 3);
 
           const r = replyButtons.length > 0
             ? await sendDMButtons(acct.accessToken, { id: senderId }, reply, replyButtons)
             : await sendDMText(acct.accessToken, { id: senderId }, reply);
+          logAutomation('dm-auto-reply', 'reply send attempted', {
+            jobId: job.id,
+            automationId: auto._id,
+            senderId,
+            ok: r.ok,
+            error: graphError(r),
+            buttons: replyButtons.length,
+          });
 
           await dbi.collection('automation_runs').insertOne({
             _id: uuidv4(),
@@ -269,8 +446,24 @@ async function processJob(job) {
             flow: 'dm-reply',
             ranAt: new Date(),
           });
-          console.log(`[worker] dm-reply sent for automation ${auto._id} → ${senderId}`);
+          logAutomation('dm-auto-reply', 'automation run recorded', {
+            jobId: job.id,
+            automationId: auto._id,
+            senderId,
+          });
         }
+      } else if (!incomingText) {
+        logAutomation('dm-auto-reply', 'skipped messaging event without text', {
+          jobId: job.id,
+          igUserId,
+          senderId: senderId || null,
+        });
+      } else if (!senderId) {
+        logAutomation('dm-auto-reply', 'skipped messaging event without sender id', {
+          jobId: job.id,
+          igUserId,
+          text: textPreview(incomingText),
+        });
       }
     }
   }
