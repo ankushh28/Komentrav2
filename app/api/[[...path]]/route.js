@@ -190,8 +190,8 @@ async function handleCallback(req) {
     const accessToken = longData.access_token || shortToken;
     const expiresIn = longData.expires_in || 3600;
 
-    // 3) Fetch user info
-    const infoUrl = `https://graph.instagram.com/${API_VERSION}/me?fields=user_id,username,account_type&access_token=${accessToken}`;
+    // 3) Fetch user info — get BOTH user_id (app-scoped) and id (page-scoped, used in webhooks)
+    const infoUrl = `https://graph.instagram.com/${API_VERSION}/me?fields=user_id,id,username,account_type&access_token=${accessToken}`;
     const infoRes = await fetch(infoUrl);
     const info = await infoRes.json();
 
@@ -202,6 +202,7 @@ async function handleCallback(req) {
         $set: {
           connectedUserId: userId,
           instagramUserId: igUserId,
+          instagramBusinessAccountId: info.id || null,
           username: info.username || 'unknown',
           accountType: info.account_type || null,
           accessToken,
@@ -318,10 +319,39 @@ async function handleCreateAutomation(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const body = await req.json();
+  const type = body.type === 'dm_reply' ? 'dm_reply' : 'comment_dm';
+  const db = await getDb();
+
+  if (type === 'dm_reply') {
+    const { instagramAccountId, keywords, matchType, replyMessages, replyButtons, name, igUsername } = body;
+    const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : [];
+    const cleanReplies = Array.isArray(replyMessages) ? replyMessages.map(s => String(s).trim()).filter(Boolean).slice(0, 3) : [];
+    const cleanButtons = Array.isArray(replyButtons) ? replyButtons.filter(b => b && b.title && b.url).slice(0, 3) : [];
+    if (!instagramAccountId || cleanKeywords.length === 0 || cleanReplies.length === 0) {
+      return json({ error: 'Need an account, at least 1 keyword, and 1 reply variant.' }, 400);
+    }
+    const doc = {
+      _id: uuidv4(),
+      userId: u.userId,
+      instagramAccountId,
+      type: 'dm_reply',
+      name: name || cleanKeywords[0],
+      keywords: cleanKeywords,
+      matchType: ['exact', 'contains', 'starts_with'].includes(matchType) ? matchType : 'contains',
+      replyMessages: cleanReplies,
+      replyButtons: cleanButtons,
+      igUsername: igUsername || null,
+      isActive: true,
+      createdAt: new Date(),
+    };
+    await db.collection('automations').insertOne(doc);
+    return json({ automation: doc });
+  }
+
   const {
     instagramAccountId, postId, postPermalink, postThumbnail,
     keywords, matchType, replyMessages, dmText, dmButtons,
-    askToFollow, followMessage, igUsername, name,
+    askToFollow, followMessage, followButtonText, igUsername, name,
   } = body;
   const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : [];
   const cleanReplies = Array.isArray(replyMessages) ? replyMessages.map(s => String(s).trim()).filter(Boolean).slice(0, 3) : [];
@@ -329,11 +359,11 @@ async function handleCreateAutomation(req) {
   if (!instagramAccountId || !postId || cleanKeywords.length === 0 || cleanReplies.length === 0 || !dmText) {
     return json({ error: 'Missing fields. Need at least 1 keyword, 1 reply variant and a DM message.' }, 400);
   }
-  const db = await getDb();
   const doc = {
     _id: uuidv4(),
     userId: u.userId,
     instagramAccountId,
+    type: 'comment_dm',
     postId,
     postPermalink: postPermalink || null,
     postThumbnail: postThumbnail || null,
@@ -345,10 +375,10 @@ async function handleCreateAutomation(req) {
     dmButtons: cleanButtons,
     askToFollow: !!askToFollow,
     followMessage: askToFollow ? (followMessage || `Follow @${igUsername || ''} first to unlock this!`) : null,
+    followButtonText: askToFollow ? (followButtonText || 'I Followed ✓') : null,
     igUsername: igUsername || null,
     isActive: true,
     createdAt: new Date(),
-    // legacy fields for back-compat
     triggerWord: cleanKeywords[0],
     replyMessage: cleanReplies[0],
     dmMessage: String(dmText),

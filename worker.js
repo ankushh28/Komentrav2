@@ -177,47 +177,101 @@ async function processJob(job) {
       }
     }
 
-    // Postbacks (I Followed)
+    // Postbacks (I Followed) and DM auto-replies
     for (const msg of entry.messaging || []) {
-      if (!msg.postback?.payload?.startsWith('RP_FOLLOW:')) continue;
-      const automationId = msg.postback.payload.slice('RP_FOLLOW:'.length);
+      // Skip echoes (our own outgoing messages re-delivered as webhooks)
+      if (msg.message?.is_echo) continue;
+
       const senderId = msg.sender?.id;
-      if (!senderId) continue;
 
-      const auto = await dbi.collection('automations').findOne({ _id: automationId });
-      if (!auto || !auto.isActive) continue;
-      const acct = await dbi.collection('instagram_accounts').findOne({ _id: auto.instagramAccountId });
-      if (!acct) continue;
+      // 1) Handle "I Followed" postback button
+      if (msg.postback?.payload?.startsWith('RP_FOLLOW:') && senderId) {
+        const automationId = msg.postback.payload.slice('RP_FOLLOW:'.length);
+        const auto = await dbi.collection('automations').findOne({ _id: automationId });
+        if (!auto || !auto.isActive) continue;
+        const acct = await dbi.collection('instagram_accounts').findOne({ _id: auto.instagramAccountId });
+        if (!acct) continue;
 
-      const followCheck = await checkUserFollowsBusiness(acct.accessToken, senderId);
-      if (!followCheck.isFollowing) {
-        const retry = await sendFollowPrompt(
-          acct.accessToken, { id: senderId },
-          `Almost there! 🙏 We don't see your follow yet. Please follow @${acct.username} first, then tap below.`,
-          auto.followButtonText || 'I Followed ✓', auto._id, acct.username,
-        );
+        const followCheck = await checkUserFollowsBusiness(acct.accessToken, senderId);
+        if (!followCheck.isFollowing) {
+          const retry = await sendFollowPrompt(
+            acct.accessToken, { id: senderId },
+            `Almost there! 🙏 We don't see your follow yet. Please follow @${acct.username} first, then tap below.`,
+            auto.followButtonText || 'I Followed ✓', auto._id, acct.username,
+          );
+          await dbi.collection('automation_runs').insertOne({
+            _id: uuidv4(), automationId: auto._id, userId: auto.userId,
+            instagramAccountId: auto.instagramAccountId,
+            fromUserId: senderId, flow: 'follow-not-verified',
+            followCheck, retryResult: retry, ranAt: new Date(),
+          });
+          continue;
+        }
+
+        const dmText = auto.dmText || auto.dmMessage || '';
+        const buttons = (auto.dmButtons || []).filter(b => b.title && b.url).slice(0, 3);
+        const rDM = buttons.length > 0
+          ? await sendDMButtons(acct.accessToken, { id: senderId }, dmText, buttons)
+          : await sendDMText(acct.accessToken, { id: senderId }, dmText);
+
         await dbi.collection('automation_runs').insertOne({
           _id: uuidv4(), automationId: auto._id, userId: auto.userId,
           instagramAccountId: auto.instagramAccountId,
-          fromUserId: senderId, flow: 'follow-not-verified',
-          followCheck, retryResult: retry, ranAt: new Date(),
+          fromUserId: senderId, dmResult: rDM,
+          flow: 'follow-confirmed', followCheck, ranAt: new Date(),
         });
+        console.log(`[worker] post-follow DM sent for ${automationId}`);
         continue;
       }
 
-      const dmText = auto.dmText || auto.dmMessage || '';
-      const buttons = (auto.dmButtons || []).filter(b => b.title && b.url).slice(0, 3);
-      const rDM = buttons.length > 0
-        ? await sendDMButtons(acct.accessToken, { id: senderId }, dmText, buttons)
-        : await sendDMText(acct.accessToken, { id: senderId }, dmText);
+      // 2) DM AUTO-REPLY: a regular incoming DM with text
+      const incomingText = msg.message?.text;
+      if (incomingText && senderId) {
+        // Find the connected account for this IG user (try both ID formats)
+        const acct = await dbi.collection('instagram_accounts').findOne({
+          $or: [
+            { instagramBusinessAccountId: igUserId },
+            { instagramUserId: igUserId },
+          ],
+        });
+        if (!acct) {
+          console.log('[worker] no account for messaging entry.id', igUserId);
+          continue;
+        }
 
-      await dbi.collection('automation_runs').insertOne({
-        _id: uuidv4(), automationId: auto._id, userId: auto.userId,
-        instagramAccountId: auto.instagramAccountId,
-        fromUserId: senderId, dmResult: rDM,
-        flow: 'follow-confirmed', followCheck, ranAt: new Date(),
-      });
-      console.log(`[worker] post-follow DM sent for ${automationId}`);
+        const automations = await dbi.collection('automations').find({
+          instagramAccountId: acct._id,
+          type: 'dm_reply',
+          isActive: true,
+        }).toArray();
+
+        for (const auto of automations) {
+          const keywords = auto.keywords || [];
+          if (!matchesKeyword(incomingText.toLowerCase(), keywords, auto.matchType || 'contains')) continue;
+
+          const replies = auto.replyMessages || [];
+          const reply = replies[Math.floor(Math.random() * replies.length)];
+          const replyButtons = (auto.replyButtons || []).filter(b => b.title && b.url).slice(0, 3);
+
+          const r = replyButtons.length > 0
+            ? await sendDMButtons(acct.accessToken, { id: senderId }, reply, replyButtons)
+            : await sendDMText(acct.accessToken, { id: senderId }, reply);
+
+          await dbi.collection('automation_runs').insertOne({
+            _id: uuidv4(),
+            automationId: auto._id,
+            userId: auto.userId,
+            instagramAccountId: auto.instagramAccountId,
+            fromUserId: senderId,
+            commentText: incomingText, // re-use field for analytics
+            replyUsed: reply,
+            dmResult: r,
+            flow: 'dm-reply',
+            ranAt: new Date(),
+          });
+          console.log(`[worker] dm-reply sent for automation ${auto._id} → ${senderId}`);
+        }
+      }
     }
   }
 }
