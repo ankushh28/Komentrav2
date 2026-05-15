@@ -431,6 +431,19 @@ function matchesKeyword(text, keywords, matchType) {
   });
 }
 
+// Instagram User Profile API — verifies if the IG user (igsid) follows the connected business account.
+// Requires `instagram_business_manage_messages` scope (we have it).
+async function checkUserFollowsBusiness(accessToken, igsid) {
+  const url = `https://graph.instagram.com/v22.0/${igsid}?fields=is_user_follow_business,follower_count,name,username&access_token=${encodeURIComponent(accessToken)}`;
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    return { ok: r.ok, isFollowing: d.is_user_follow_business === true, raw: d };
+  } catch (e) {
+    return { ok: false, isFollowing: false, error: e.message };
+  }
+}
+
 async function sendDM(accessToken, igUserId, recipientId, message) {
   const url = `https://graph.instagram.com/${API_VERSION}/${igUserId}/messages`;
   const r = await fetch(url, {
@@ -567,6 +580,34 @@ async function handleWebhookEvent(req) {
             const acct = await db.collection('instagram_accounts').findOne({ _id: auto.instagramAccountId });
             if (!acct) continue;
 
+            // VERIFY the user actually follows the business account
+            const followCheck = await checkUserFollowsBusiness(acct.accessToken, senderId);
+            console.log('Follow verification:', followCheck);
+
+            if (!followCheck.isFollowing) {
+              // Re-prompt — politely ask them to actually follow
+              const retry = await sendFollowPrompt(
+                acct.accessToken,
+                { id: senderId },
+                `Almost there! 🙏 We don't see your follow yet. Please follow @${acct.username} first, then tap below.`,
+                auto.followButtonText || 'I Followed ✓',
+                auto._id,
+                acct.username,
+              );
+              console.log('Follow re-prompt sent:', retry);
+
+              await db.collection('automation_runs').insertOne({
+                _id: uuidv4(),
+                automationId: auto._id,
+                fromUserId: senderId,
+                flow: 'follow-not-verified',
+                followCheck,
+                ranAt: new Date(),
+              });
+              continue;
+            }
+
+            // ✅ Confirmed they follow → send the main DM
             const dmText = auto.dmText || auto.dmMessage || '';
             const buttons = Array.isArray(auto.dmButtons) ? auto.dmButtons.filter(b => b.title && b.url).slice(0, 3) : [];
             let rDM;
@@ -583,6 +624,7 @@ async function handleWebhookEvent(req) {
               fromUserId: senderId,
               dmResult: rDM,
               flow: 'follow-confirmed',
+              followCheck,
               ranAt: new Date(),
             });
           }
