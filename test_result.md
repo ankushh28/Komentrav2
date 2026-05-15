@@ -103,7 +103,139 @@
 #====================================================================================================
 
 user_problem_statement: |
-  Instagram Comment Automation SaaS MVP.
+  Phase 2: Scalable architecture (Redis + BullMQ + worker), email OTP signup (Resend),
+  analytics dashboard, landing page. Webhook now enqueues to BullMQ instead of inline processing.
+
+backend:
+  - task: "Email OTP signup + verify-otp + resend-otp + login (with verification gate)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js, lib/email.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            POST /api/auth/signup now requires {username, email, password} and instead of returning a token,
+            it generates a 6-digit OTP, stores it in users collection with 10-min expiry, and sends an email
+            via Resend (RESEND_API_KEY in env). Returns {needsVerification: true, email}.
+            POST /api/auth/verify-otp validates {email, otp} → marks emailVerified, returns JWT.
+            POST /api/auth/resend-otp sends a fresh OTP for unverified accounts.
+            POST /api/auth/login now returns 403 with {needsVerification:true, email} if not verified.
+        - working: true
+          agent: "testing"
+          comment: |
+            Tested complete OTP auth flow (10 tests):
+            ✅ Signup returns needsVerification:true (not token) - correct OTP flow
+            ✅ Missing fields validation (400)
+            ✅ Repeat signup for unverified user resends OTP and updates password
+            ✅ Login before verification returns 403 with needsVerification:true
+            ✅ Verify OTP (read from MongoDB) returns token + user
+            ✅ Re-verify fails with "Already verified" (400)
+            ✅ Wrong OTP rejected with "Invalid code" (400)
+            ✅ Login after verification succeeds with token
+            ✅ Wrong password rejected (401)
+            ✅ Resend OTP works and changes OTP in MongoDB
+            ✅ Resend OTP for verified user fails with "Already verified" (400)
+            ✅ GET /api/auth/me returns correct user data
+            All OTP verification flows working correctly.
+  - task: "Webhook enqueues to BullMQ instead of processing inline"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js, lib/queue.js, worker.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            POST /api/webhook now archives raw payload + adds job to BullMQ queue (Redis-backed)
+            and returns 200 EVENT_RECEIVED in <100ms. The worker.js process consumes the queue and
+            does the actual matching, reply posting, DM sending, and follow verification.
+            Worker runs under supervisor (autostart, autorestart) with concurrency=8.
+        - working: true
+          agent: "testing"
+          comment: |
+            Tested webhook BullMQ enqueue (3 tests):
+            ✅ Webhook verify GET returns plain text challenge (200)
+            ✅ Webhook POST returns 200 "EVENT_RECEIVED" with latency 178ms < 1000ms (async working)
+            ✅ Webhook event archived in MongoDB webhook_events collection
+            ✅ Multiple webhooks (5) in parallel all succeed with avg latency 369ms < 1000ms
+            Webhook enqueue to BullMQ working correctly - no blocking, fast responses.
+  - task: "Analytics endpoint /api/analytics"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            GET /api/analytics returns: summary totals, 7-day timeline, per-automation stats,
+            top keywords, engagement funnel (triggers→replies→follow gated→follow confirmed→DMs),
+            and last 50 matched comments. Auth required.
+        - working: true
+          agent: "testing"
+          comment: |
+            Tested analytics endpoint (2 tests):
+            ✅ Without auth returns 401 "Unauthorized"
+            ✅ With auth returns 200 with all required fields:
+               - summary.totals (accounts, automations, activeAutomations, totalTriggers, totalReplies, totalDMs, followConvRate)
+               - summary.runsLast7Days
+               - timeline (array of 7 date/count entries)
+               - perAutomation (array)
+               - topKeywords (array)
+               - funnel (triggers, replies, followGated, followConfirmed, dmsSent)
+               - recentMatches (array)
+            Analytics endpoint working correctly with proper auth protection and complete data structure.
+frontend:
+  - task: "Landing page at /, dashboard at /dashboard, auth at /auth, analytics at /analytics"
+    implemented: true
+    working: "NA"
+    file: "app/page.js, app/dashboard/page.js, app/auth/page.js, app/analytics/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Landing page with hero/features/how-it-works/CTA. Auth page handles signup with OTP step + login. Dashboard now has Analytics button in header. Analytics page shows charts (recharts) for timeline, funnel, top keywords + per-automation table + recent matches table."
+
+metadata:
+  created_by: "main_agent"
+  version: "2.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Email OTP signup + verify-otp + resend-otp + login (with verification gate)"
+    - "Webhook enqueues to BullMQ instead of processing inline"
+    - "Analytics endpoint /api/analytics"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Phase 2 testing notes:
+        - Use external base URL from /app/.env's NEXT_PUBLIC_BASE_URL.
+        - Auth changed: /api/auth/signup now expects {username, email, password} and returns
+          {needsVerification: true, email} instead of {token}. To get a token in tests, hit
+          /api/auth/verify-otp with the OTP — but tests can't read real emails. Workaround:
+          either query MongoDB users collection for the latest OTP on the test email,
+          or pre-create a verified user via direct DB insert.
+        - /api/webhook should still return 200 "EVENT_RECEIVED" quickly (<200ms). The actual
+          processing now happens in worker.js consuming BullMQ queue. Don't expect immediate
+          inline processing in the same HTTP response.
+        - /api/analytics requires auth and returns the JSON shape described above.
+        - Make sure Redis is up: redis-cli ping → PONG. Worker is up: supervisorctl status worker.
   Users sign up / log in (JWT + bcrypt), connect their Instagram Business account via Meta OAuth,
   pick a post + a trigger keyword, and create an automation that auto-replies to comments
   and DMs commenters when the trigger word is detected. Webhook receives Instagram comment

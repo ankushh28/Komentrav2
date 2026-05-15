@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { getDb } from '@/lib/mongo';
 import { hashPassword, comparePassword, signToken, getUserFromRequest } from '@/lib/auth';
+import { sendOtpEmail, generateOtp } from '@/lib/email';
+import { getQueue } from '@/lib/queue';
 
 const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
@@ -21,20 +23,76 @@ function getPath(params) {
 
 // ----------- AUTH HANDLERS -----------
 async function handleSignup(req) {
-  const { email, password } = await req.json();
-  if (!email || !password) return json({ error: 'email and password required' }, 400);
+  const { email, password, username } = await req.json();
+  if (!email || !password || !username) return json({ error: 'username, email and password required' }, 400);
   const db = await getDb();
   const existing = await db.collection('users').findOne({ email });
-  if (existing) return json({ error: 'User already exists' }, 400);
-  const user = {
-    _id: uuidv4(),
-    email,
-    password: await hashPassword(password),
-    createdAt: new Date(),
-  };
-  await db.collection('users').insertOne(user);
-  const token = signToken({ userId: user._id, email });
-  return json({ token, user: { id: user._id, email } });
+  if (existing && existing.emailVerified) return json({ error: 'User already exists' }, 400);
+
+  const otp = generateOtp();
+  const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+
+  if (existing && !existing.emailVerified) {
+    // Allow resending OTP for unverified accounts
+    await db.collection('users').updateOne(
+      { _id: existing._id },
+      { $set: { username, password: await hashPassword(password), otp, otpExpiresAt, updatedAt: new Date() } },
+    );
+  } else {
+    const user = {
+      _id: uuidv4(),
+      username,
+      email,
+      password: await hashPassword(password),
+      emailVerified: false,
+      otp,
+      otpExpiresAt,
+      createdAt: new Date(),
+    };
+    await db.collection('users').insertOne(user);
+  }
+
+  try {
+    const r = await sendOtpEmail(email, otp, username);
+    console.log('OTP email sent:', r?.data?.id || r);
+  } catch (e) {
+    console.error('Failed to send OTP email', e);
+    return json({ error: 'Failed to send verification email. Please try again.' }, 500);
+  }
+  return json({ needsVerification: true, email });
+}
+
+async function handleVerifyOtp(req) {
+  const { email, otp } = await req.json();
+  if (!email || !otp) return json({ error: 'email and otp required' }, 400);
+  const db = await getDb();
+  const user = await db.collection('users').findOne({ email });
+  if (!user) return json({ error: 'User not found' }, 404);
+  if (user.emailVerified) return json({ error: 'Already verified. Please log in.' }, 400);
+  if (!user.otp || user.otp !== otp) return json({ error: 'Invalid code' }, 400);
+  if (new Date(user.otpExpiresAt) < new Date()) return json({ error: 'Code expired. Resend a new one.' }, 400);
+
+  await db.collection('users').updateOne(
+    { _id: user._id },
+    { $set: { emailVerified: true }, $unset: { otp: '', otpExpiresAt: '' } },
+  );
+  const token = signToken({ userId: user._id, email: user.email, username: user.username });
+  return json({ token, user: { id: user._id, email: user.email, username: user.username } });
+}
+
+async function handleResendOtp(req) {
+  const { email } = await req.json();
+  if (!email) return json({ error: 'email required' }, 400);
+  const db = await getDb();
+  const user = await db.collection('users').findOne({ email });
+  if (!user) return json({ error: 'User not found' }, 404);
+  if (user.emailVerified) return json({ error: 'Already verified' }, 400);
+
+  const otp = generateOtp();
+  const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  await db.collection('users').updateOne({ _id: user._id }, { $set: { otp, otpExpiresAt } });
+  try { await sendOtpEmail(email, otp, user.username); } catch (e) { return json({ error: 'Failed to send' }, 500); }
+  return json({ sent: true });
 }
 
 async function handleLogin(req) {
@@ -45,14 +103,15 @@ async function handleLogin(req) {
   if (!user) return json({ error: 'Invalid credentials' }, 401);
   const ok = await comparePassword(password, user.password);
   if (!ok) return json({ error: 'Invalid credentials' }, 401);
-  const token = signToken({ userId: user._id, email });
-  return json({ token, user: { id: user._id, email } });
+  if (!user.emailVerified) return json({ error: 'Please verify your email first', needsVerification: true, email }, 403);
+  const token = signToken({ userId: user._id, email: user.email, username: user.username });
+  return json({ token, user: { id: user._id, email: user.email, username: user.username } });
 }
 
 async function handleMe(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
-  return json({ user: { id: u.userId, email: u.email } });
+  return json({ user: { id: u.userId, email: u.email, username: u.username } });
 }
 
 // ----------- INSTAGRAM OAUTH -----------
@@ -167,10 +226,10 @@ async function handleCallback(req) {
       console.error('Webhook subscribe error', e);
     }
 
-    return NextResponse.redirect(`${BASE_URL}/?ig=success`);
+    return NextResponse.redirect(`${BASE_URL}/dashboard?ig=success`);
   } catch (e) {
     console.error('OAuth callback exception', e);
-    return NextResponse.redirect(`${BASE_URL}/?ig=error&msg=${encodeURIComponent(e.message)}`);
+    return NextResponse.redirect(`${BASE_URL}/dashboard?ig=error&msg=${encodeURIComponent(e.message)}`);
   }
 }
 
@@ -461,181 +520,126 @@ async function sendDM(accessToken, igUserId, recipientId, message) {
 async function handleWebhookEvent(req) {
   const rawBody = await req.text();
   let body;
+  try { body = JSON.parse(rawBody); } catch (e) { return new NextResponse('bad json', { status: 400 }); }
+  console.log('Webhook event received, enqueuing');
+
+  // Best-effort raw archive (non-blocking)
   try {
-    body = JSON.parse(rawBody);
-  } catch (e) {
-    return new NextResponse('bad json', { status: 400 });
-  }
-  console.log('Webhook event:', JSON.stringify(body));
+    const db = await getDb();
+    db.collection('webhook_events').insertOne({ _id: uuidv4(), receivedAt: new Date(), payload: body }).catch(() => {});
+  } catch {}
 
-  const db = await getDb();
-  await db.collection('webhook_events').insertOne({ _id: uuidv4(), receivedAt: new Date(), payload: body });
-
-  // Acknowledge immediately spec, but process inline since simple MVP
+  // Push to BullMQ for async processing — return 200 immediately to Meta
   try {
-    if (body.object === 'instagram' && Array.isArray(body.entry)) {
-      for (const entry of body.entry) {
-        const igUserId = String(entry.id);
-        const changes = entry.changes || [];
-        for (const change of changes) {
-          if (change.field === 'comments') {
-            const v = change.value || {};
-            const commentText = (v.text || '').toLowerCase();
-            const commentId = v.id;
-            const mediaId = v.media?.id || v.media_id;
-            const fromId = v.from?.id;
-            if (!commentId || !mediaId) continue;
-
-            // Find automations by postId directly — this avoids IG-ID-format mismatches
-            // between OAuth-returned user_id and webhook entry.id.
-            const automations = await db.collection('automations').find({
-              postId: mediaId,
-              isActive: true,
-            }).toArray();
-
-            if (automations.length === 0) {
-              console.log('No automation found for media', mediaId);
-              continue;
-            }
-
-            // Load the IG account linked to the first matched automation (all should share account)
-            const acct = await db.collection('instagram_accounts').findOne({ _id: automations[0].instagramAccountId });
-            if (!acct) {
-              console.log('IG account record missing for automation', automations[0]._id);
-              continue;
-            }
-
-            // Opportunistically save the webhook-style business account ID for future use
-            if (acct.instagramBusinessAccountId !== igUserId) {
-              await db.collection('instagram_accounts').updateOne(
-                { _id: acct._id },
-                { $set: { instagramBusinessAccountId: igUserId } }
-              );
-            }
-            for (const auto of automations) {
-              const keywords = (auto.keywords && auto.keywords.length) ? auto.keywords : (auto.triggerWord ? [auto.triggerWord] : []);
-              const matchType = auto.matchType || 'contains';
-              if (matchesKeyword(commentText, keywords, matchType)) {
-                console.log(`Matched keywords ${JSON.stringify(keywords)} (${matchType}) on comment '${commentText}'`);
-                // Pick random reply variant
-                const replies = (auto.replyMessages && auto.replyMessages.length) ? auto.replyMessages : [auto.replyMessage];
-                const reply = replies[Math.floor(Math.random() * replies.length)];
-                const r1 = await replyToComment(acct.accessToken, commentId, reply);
-                console.log('Reply result', r1);
-
-                // Branch: askToFollow → send a single follow-prompt with postback button.
-                // Else → send the main DM straight away.
-                let rDM = null;
-                if (auto.askToFollow) {
-                  rDM = await sendFollowPrompt(
-                    acct.accessToken,
-                    { comment_id: commentId },
-                    auto.followMessage || `Follow @${acct.username} first to unlock 🎁`,
-                    auto.followButtonText || 'I Followed ✓',
-                    auto._id,
-                    acct.username,
-                  );
-                  console.log('Follow-prompt sent:', rDM);
-                } else {
-                  const dmText = auto.dmText || auto.dmMessage || '';
-                  const buttons = Array.isArray(auto.dmButtons) ? auto.dmButtons.filter(b => b.title && b.url).slice(0, 3) : [];
-                  if (buttons.length > 0) {
-                    rDM = await sendDMButtons(acct.accessToken, { comment_id: commentId }, dmText, buttons);
-                  } else {
-                    rDM = await sendDMText(acct.accessToken, { comment_id: commentId }, dmText);
-                  }
-                  console.log('DM result', rDM);
-                }
-
-                await db.collection('automation_runs').insertOne({
-                  _id: uuidv4(),
-                  automationId: auto._id,
-                  commentId,
-                  fromUserId: fromId,
-                  commentText: v.text,
-                  replyUsed: reply,
-                  replyResult: r1,
-                  dmResult: rDM,
-                  flow: auto.askToFollow ? 'follow-gated' : 'direct',
-                  ranAt: new Date(),
-                });
-              }
-            }
-          }
-        }
-
-        // Handle messaging events (postback from "I Followed" button)
-        const messaging = entry.messaging || [];
-        for (const msg of messaging) {
-          if (msg.postback?.payload?.startsWith('RP_FOLLOW:')) {
-            const automationId = msg.postback.payload.slice('RP_FOLLOW:'.length);
-            const senderId = msg.sender?.id;
-            if (!senderId) continue;
-
-            const auto = await db.collection('automations').findOne({ _id: automationId });
-            if (!auto || !auto.isActive) {
-              console.log('Postback automation not found or inactive', automationId);
-              continue;
-            }
-            const acct = await db.collection('instagram_accounts').findOne({ _id: auto.instagramAccountId });
-            if (!acct) continue;
-
-            // VERIFY the user actually follows the business account
-            const followCheck = await checkUserFollowsBusiness(acct.accessToken, senderId);
-            console.log('Follow verification:', followCheck);
-
-            if (!followCheck.isFollowing) {
-              // Re-prompt — politely ask them to actually follow
-              const retry = await sendFollowPrompt(
-                acct.accessToken,
-                { id: senderId },
-                `Almost there! 🙏 We don't see your follow yet. Please follow @${acct.username} first, then tap below.`,
-                auto.followButtonText || 'I Followed ✓',
-                auto._id,
-                acct.username,
-              );
-              console.log('Follow re-prompt sent:', retry);
-
-              await db.collection('automation_runs').insertOne({
-                _id: uuidv4(),
-                automationId: auto._id,
-                fromUserId: senderId,
-                flow: 'follow-not-verified',
-                followCheck,
-                ranAt: new Date(),
-              });
-              continue;
-            }
-
-            // ✅ Confirmed they follow → send the main DM
-            const dmText = auto.dmText || auto.dmMessage || '';
-            const buttons = Array.isArray(auto.dmButtons) ? auto.dmButtons.filter(b => b.title && b.url).slice(0, 3) : [];
-            let rDM;
-            if (buttons.length > 0) {
-              rDM = await sendDMButtons(acct.accessToken, { id: senderId }, dmText, buttons);
-            } else {
-              rDM = await sendDMText(acct.accessToken, { id: senderId }, dmText);
-            }
-            console.log('Post-follow DM sent to', senderId, ':', rDM);
-
-            await db.collection('automation_runs').insertOne({
-              _id: uuidv4(),
-              automationId: auto._id,
-              fromUserId: senderId,
-              dmResult: rDM,
-              flow: 'follow-confirmed',
-              followCheck,
-              ranAt: new Date(),
-            });
-          }
-        }
-      }
-    }
+    const q = getQueue();
+    await q.add('event', body, { jobId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
   } catch (e) {
-    console.error('webhook processing error', e);
+    console.error('queue error', e?.message);
   }
 
   return new NextResponse('EVENT_RECEIVED', { status: 200 });
+}
+
+// ----------- ANALYTICS -----------
+async function handleAnalytics(req) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const db = await getDb();
+
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const allRuns = await db.collection('automation_runs').find({ userId: u.userId }).toArray();
+  const recent = allRuns.filter(r => r.ranAt && new Date(r.ranAt) >= since);
+  const automations = await db.collection('automations').find({ userId: u.userId }).toArray();
+  const accounts = await db.collection('instagram_accounts').find({ connectedUserId: u.userId }).toArray();
+
+  // Daily timeline (last 7 days)
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - i);
+    const next = new Date(d); next.setDate(next.getDate() + 1);
+    const count = recent.filter(r => new Date(r.ranAt) >= d && new Date(r.ranAt) < next).length;
+    days.push({ date: d.toISOString().slice(0, 10), count });
+  }
+
+  // Per automation totals
+  const perAutomation = automations.map(a => {
+    const runs = allRuns.filter(r => r.automationId === a._id);
+    const triggers = runs.filter(r => r.flow === 'direct' || r.flow === 'follow-gated').length;
+    const dms = runs.filter(r => r.dmResult?.ok).length;
+    const followConfirmed = runs.filter(r => r.flow === 'follow-confirmed').length;
+    const lastRun = runs.length ? runs.map(r => new Date(r.ranAt)).sort((a, b) => b - a)[0] : null;
+    return {
+      id: a._id,
+      name: a.name || (a.keywords && a.keywords[0]) || a.triggerWord,
+      thumb: a.postThumbnail,
+      isActive: a.isActive,
+      keywords: a.keywords || (a.triggerWord ? [a.triggerWord] : []),
+      triggers, dms, followConfirmed,
+      lastRun,
+    };
+  });
+
+  // Top keywords (from comment matches)
+  const kwMap = {};
+  recent.forEach(r => {
+    const text = (r.commentText || '').toLowerCase();
+    const auto = automations.find(a => a._id === r.automationId);
+    const kws = auto?.keywords || [];
+    kws.forEach(k => { if (text.includes(k)) kwMap[k] = (kwMap[k] || 0) + 1; });
+  });
+  const topKeywords = Object.entries(kwMap).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, c]) => ({ keyword: k, count: c }));
+
+  // Funnel
+  const totalTriggers = allRuns.filter(r => ['direct', 'follow-gated'].includes(r.flow)).length;
+  const totalReplies = allRuns.filter(r => r.replyResult?.ok).length;
+  const totalDMs = allRuns.filter(r => r.dmResult?.ok).length;
+  const totalFollowGated = allRuns.filter(r => r.flow === 'follow-gated').length;
+  const totalFollowConfirmed = allRuns.filter(r => r.flow === 'follow-confirmed').length;
+  const followConvRate = totalFollowGated > 0 ? Math.round((totalFollowConfirmed / totalFollowGated) * 100) : null;
+
+  // Recent matched comments (last 50)
+  const recentMatches = allRuns
+    .filter(r => r.commentText)
+    .sort((a, b) => new Date(b.ranAt) - new Date(a.ranAt))
+    .slice(0, 50)
+    .map(r => {
+      const auto = automations.find(a => a._id === r.automationId);
+      return {
+        id: r._id,
+        commentText: r.commentText,
+        automationName: auto?.name || (auto?.keywords && auto.keywords[0]) || 'Automation',
+        flow: r.flow,
+        ranAt: r.ranAt,
+        replyOk: !!r.replyResult?.ok,
+        dmOk: !!r.dmResult?.ok,
+      };
+    });
+
+  return json({
+    summary: {
+      totals: {
+        accounts: accounts.length,
+        automations: automations.length,
+        activeAutomations: automations.filter(a => a.isActive).length,
+        totalTriggers,
+        totalReplies,
+        totalDMs,
+        followConvRate,
+      },
+      runsLast7Days: recent.length,
+    },
+    timeline: days,
+    perAutomation,
+    topKeywords,
+    funnel: {
+      triggers: totalTriggers,
+      replies: totalReplies,
+      followGated: totalFollowGated,
+      followConfirmed: totalFollowConfirmed,
+      dmsSent: totalDMs,
+    },
+    recentMatches,
+  });
 }
 
 // ----------- DISPATCHER -----------
@@ -646,8 +650,13 @@ async function dispatch(req, params, method) {
 
   // Auth
   if (path === '/auth/signup' && method === 'POST') return handleSignup(req);
+  if (path === '/auth/verify-otp' && method === 'POST') return handleVerifyOtp(req);
+  if (path === '/auth/resend-otp' && method === 'POST') return handleResendOtp(req);
   if (path === '/auth/login' && method === 'POST') return handleLogin(req);
   if (path === '/auth/me' && method === 'GET') return handleMe(req);
+
+  // Analytics
+  if (path === '/analytics' && method === 'GET') return handleAnalytics(req);
 
   // Instagram
   if (path === '/instagram/connect' && method === 'GET') return handleConnect(req);
