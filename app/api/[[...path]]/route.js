@@ -351,6 +351,54 @@ async function replyToComment(accessToken, commentId, message) {
   return { ok: r.ok, data: d };
 }
 
+async function sendDMText(accessToken, igUserId, recipientCommentId, message) {
+  const url = `https://graph.instagram.com/v22.0/me/messages?access_token=${encodeURIComponent(accessToken)}`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient: { comment_id: recipientCommentId },
+      message: { text: message },
+    }),
+  });
+  const d = await r.json();
+  return { ok: r.ok, data: d };
+}
+
+async function sendDMButtons(accessToken, igUserId, recipientCommentId, text, buttons) {
+  const url = `https://graph.instagram.com/v22.0/me/messages?access_token=${encodeURIComponent(accessToken)}`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient: { comment_id: recipientCommentId },
+      message: {
+        attachment: {
+          type: 'template',
+          payload: {
+            template_type: 'button',
+            text,
+            buttons: buttons.map(b => ({ type: 'web_url', url: b.url, title: b.title })),
+          },
+        },
+      },
+    }),
+  });
+  const d = await r.json();
+  return { ok: r.ok, data: d };
+}
+
+function matchesKeyword(text, keywords, matchType) {
+  const t = (text || '').toLowerCase().trim();
+  return keywords.some(k => {
+    const kw = String(k).toLowerCase().trim();
+    if (!kw) return false;
+    if (matchType === 'exact') return t === kw;
+    if (matchType === 'starts_with') return t.startsWith(kw);
+    return t.includes(kw);
+  });
+}
+
 async function sendDM(accessToken, igUserId, recipientId, message) {
   const url = `https://graph.instagram.com/${API_VERSION}/${igUserId}/messages`;
   const r = await fetch(url, {
@@ -389,22 +437,36 @@ async function handleWebhookEvent(req) {
             const v = change.value || {};
             const commentText = (v.text || '').toLowerCase();
             const commentId = v.id;
-            const mediaId = v.media?.id;
+            const mediaId = v.media?.id || v.media_id;
             const fromId = v.from?.id;
             if (!commentId || !mediaId) continue;
 
-            // Find connected account
-            const acct = await db.collection('instagram_accounts').findOne({ instagramUserId: igUserId });
-            if (!acct) {
-              console.log('No account found for ig user', igUserId);
-              continue;
-            }
-            // Find matching automation
+            // Find automations by postId directly — this avoids IG-ID-format mismatches
+            // between OAuth-returned user_id and webhook entry.id.
             const automations = await db.collection('automations').find({
-              instagramAccountId: acct._id,
               postId: mediaId,
               isActive: true,
             }).toArray();
+
+            if (automations.length === 0) {
+              console.log('No automation found for media', mediaId);
+              continue;
+            }
+
+            // Load the IG account linked to the first matched automation (all should share account)
+            const acct = await db.collection('instagram_accounts').findOne({ _id: automations[0].instagramAccountId });
+            if (!acct) {
+              console.log('IG account record missing for automation', automations[0]._id);
+              continue;
+            }
+
+            // Opportunistically save the webhook-style business account ID for future use
+            if (acct.instagramBusinessAccountId !== igUserId) {
+              await db.collection('instagram_accounts').updateOne(
+                { _id: acct._id },
+                { $set: { instagramBusinessAccountId: igUserId } }
+              );
+            }
             for (const auto of automations) {
               const keywords = (auto.keywords && auto.keywords.length) ? auto.keywords : (auto.triggerWord ? [auto.triggerWord] : []);
               const matchType = auto.matchType || 'contains';
