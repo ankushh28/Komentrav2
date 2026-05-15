@@ -178,7 +178,7 @@ async function handleCallback(req) {
       return NextResponse.redirect(`${BASE_URL}/?ig=error&msg=${encodeURIComponent(JSON.stringify(tokenData))}`);
     }
     const shortToken = tokenData.access_token;
-    const igUserId = String(tokenData.user_id);
+    const tokenUserId = String(tokenData.user_id);
 
     // 2) Exchange short -> long-lived (60 days)
     const longUrl = new URL('https://graph.instagram.com/access_token');
@@ -194,16 +194,30 @@ async function handleCallback(req) {
     const infoUrl = `https://graph.instagram.com/${API_VERSION}/me?fields=user_id,id,username,account_type&access_token=${accessToken}`;
     const infoRes = await fetch(infoUrl);
     const info = await infoRes.json();
+    const instagramUserId = String(info.user_id || info.id || tokenUserId);
+    const appScopedUserId = String(info.id || tokenUserId);
 
     const db = await getDb();
     await db.collection('instagram_accounts').findOneAndUpdate(
-      { connectedUserId: userId, instagramUserId: igUserId },
+      {
+        connectedUserId: userId,
+        $or: [
+          { instagramUserId },
+          { instagramUserId: tokenUserId },
+          { instagramBusinessAccountId: instagramUserId },
+          { instagramBusinessAccountId: tokenUserId },
+          { instagramAppScopedUserId: appScopedUserId },
+          { instagramTokenUserId: tokenUserId },
+        ],
+      },
       {
         $set: {
           connectedUserId: userId,
-          instagramUserId: igUserId,
-          instagramBusinessAccountId: info.id || null,
-          instagramWebhookIds: [igUserId, info.id].filter(Boolean).map(String),
+          instagramUserId,
+          instagramBusinessAccountId: instagramUserId,
+          instagramAppScopedUserId: appScopedUserId,
+          instagramTokenUserId: tokenUserId,
+          instagramWebhookIds: [instagramUserId, info.id, tokenUserId].filter(Boolean).map(String),
           username: info.username || 'unknown',
           accountType: info.account_type || null,
           accessToken,
@@ -217,7 +231,7 @@ async function handleCallback(req) {
 
     // 4) Subscribe app to webhooks for this user
     try {
-      const subUrl = `https://graph.instagram.com/${API_VERSION}/${igUserId}/subscribed_apps`;
+      const subUrl = `https://graph.instagram.com/${API_VERSION}/${instagramUserId}/subscribed_apps`;
       const subForm = new URLSearchParams();
       subForm.set('subscribed_fields', 'comments,messages,live_comments,message_reactions');
       subForm.set('access_token', accessToken);
@@ -265,15 +279,41 @@ async function handleResubscribe(req, accountId) {
   const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId });
   if (!acct) return json({ error: 'Account not found' }, 404);
   try {
-    const subUrl = `https://graph.instagram.com/v22.0/me/subscribed_apps`;
+    const infoUrl = `https://graph.instagram.com/${API_VERSION}/me?fields=user_id,id,username,account_type&access_token=${encodeURIComponent(acct.accessToken)}`;
+    const infoRes = await fetch(infoUrl);
+    const info = await infoRes.json();
+    if (!infoRes.ok) return json({ error: info.error?.message || 'failed to refresh account identity', details: info }, 500);
+
+    const instagramUserId = String(info.user_id || info.id || acct.instagramUserId);
+    const appScopedUserId = String(info.id || acct.instagramAppScopedUserId || acct.instagramUserId);
+    await db.collection('instagram_accounts').updateOne(
+      { _id: accountId, connectedUserId: u.userId },
+      {
+        $set: {
+          instagramUserId,
+          instagramBusinessAccountId: instagramUserId,
+          instagramAppScopedUserId: appScopedUserId,
+          username: info.username || acct.username,
+          accountType: info.account_type || acct.accountType || null,
+          updatedAt: new Date(),
+        },
+        $addToSet: {
+          instagramWebhookIds: {
+            $each: [instagramUserId, info.id, acct.instagramUserId, acct.instagramBusinessAccountId].filter(Boolean).map(String),
+          },
+        },
+      },
+    );
+
+    const subUrl = `https://graph.instagram.com/${API_VERSION}/${instagramUserId}/subscribed_apps`;
     const subForm = new URLSearchParams();
     subForm.set('subscribed_fields', 'comments,messages,live_comments,message_reactions');
     subForm.set('access_token', acct.accessToken);
     const r = await fetch(subUrl, { method: 'POST', body: subForm });
     const d = await r.json();
-    console.log('Re-subscribe result', d);
+    console.log('Re-subscribe result', { instagramUserId, data: d });
     if (!r.ok) return json({ error: d.error?.message || 'subscribe failed', details: d }, 500);
-    return json({ success: true, data: d });
+    return json({ success: true, instagramUserId, data: d });
   } catch (e) {
     return json({ error: e.message }, 500);
   }
