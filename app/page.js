@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -134,7 +135,10 @@ export default function Home() {
       </section>
 
       <footer className="border-t py-8 text-center text-sm text-muted-foreground">
-        &copy; {new Date().getFullYear()} Komentra. Built for creators.
+        <div className="flex items-center justify-center gap-3 flex-wrap">
+          <span>&copy; {new Date().getFullYear()} Komentra. Built for creators.</span>
+          <Link href="/privacy" className="text-violet-600 hover:underline">Privacy Policy</Link>
+        </div>
       </footer>
     </div>
   );
