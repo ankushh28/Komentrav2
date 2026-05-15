@@ -129,6 +129,32 @@ function graphError(result) {
   return result?.data?.error?.message || result?.data?.error?.code || null;
 }
 
+async function findConnectedAccountForMessaging(dbi, ids) {
+  const candidates = [...new Set(ids.filter(Boolean).map(String))];
+  if (candidates.length === 0) return null;
+
+  return dbi.collection('instagram_accounts').findOne({
+    $or: [
+      { instagramBusinessAccountId: { $in: candidates } },
+      { instagramUserId: { $in: candidates } },
+      { instagramWebhookIds: { $in: candidates } },
+    ],
+  });
+}
+
+async function rememberWebhookIds(dbi, accountId, ids) {
+  const candidates = [...new Set(ids.filter(Boolean).map(String))];
+  if (!accountId || candidates.length === 0) return;
+
+  await dbi.collection('instagram_accounts').updateOne(
+    { _id: accountId },
+    {
+      $addToSet: { instagramWebhookIds: { $each: candidates } },
+      $set: { updatedAt: new Date() },
+    },
+  );
+}
+
 // ---- Job processor ----
 async function processJob(job) {
   const body = job.data;
@@ -281,10 +307,12 @@ async function processJob(job) {
       }
 
       const senderId = msg.sender?.id;
+      const recipientId = msg.recipient?.id;
       logAutomation('messaging', 'message event received', {
         jobId: job.id,
         igUserId,
         senderId: senderId || null,
+        recipientId: recipientId || null,
         hasText: !!msg.message?.text,
         text: textPreview(msg.message?.text),
         hasPostback: !!msg.postback?.payload,
@@ -360,27 +388,31 @@ async function processJob(job) {
           jobId: job.id,
           igUserId,
           senderId,
+          recipientId: recipientId || null,
           text: textPreview(incomingText),
         });
 
-        // Find the connected account for this IG user (try both ID formats)
-        const acct = await dbi.collection('instagram_accounts').findOne({
-          $or: [
-            { instagramBusinessAccountId: igUserId },
-            { instagramUserId: igUserId },
-          ],
-        });
+        // Per Meta's messaging payload, recipient.id identifies the professional
+        // account receiving the message. entry.id is kept as a fallback because
+        // webhook examples and login modes can vary.
+        const accountLookupIds = [recipientId, igUserId];
+        const acct = await findConnectedAccountForMessaging(dbi, accountLookupIds);
         if (!acct) {
           logAutomation('dm-auto-reply', 'no connected instagram account found for messaging entry', {
             jobId: job.id,
             igUserId,
+            recipientId: recipientId || null,
+            lookupIds: accountLookupIds.filter(Boolean),
             senderId,
           });
           continue;
         }
+        await rememberWebhookIds(dbi, acct._id, accountLookupIds);
         logAutomation('dm-auto-reply', 'connected account matched', {
           jobId: job.id,
           igUserId,
+          recipientId: recipientId || null,
+          lookupIds: accountLookupIds.filter(Boolean),
           instagramAccountId: acct._id,
           username: acct.username || null,
         });

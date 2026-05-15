@@ -203,6 +203,7 @@ async function handleCallback(req) {
           connectedUserId: userId,
           instagramUserId: igUserId,
           instagramBusinessAccountId: info.id || null,
+          instagramWebhookIds: [igUserId, info.id].filter(Boolean).map(String),
           username: info.username || 'unknown',
           accountType: info.account_type || null,
           accessToken,
@@ -555,6 +556,7 @@ function summarizeWebhook(body) {
     entryIds: entries.map(e => e.id).filter(Boolean),
     changes: entries.reduce((sum, e) => sum + (Array.isArray(e.changes) ? e.changes.length : 0), 0),
     messaging: entries.reduce((sum, e) => sum + (Array.isArray(e.messaging) ? e.messaging.length : 0), 0),
+    recipientIds: entries.flatMap(e => (e.messaging || []).map(m => m.recipient?.id)).filter(Boolean),
     changeFields: entries.flatMap(e => (e.changes || []).map(c => c.field)).filter(Boolean),
   };
 }
