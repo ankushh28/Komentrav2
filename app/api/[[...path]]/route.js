@@ -585,6 +585,8 @@ async function handleWebhookEvent(req) {
               flow: 'follow-confirmed',
               ranAt: new Date(),
             });
+          }
+        }
       }
     }
   } catch (e) {
