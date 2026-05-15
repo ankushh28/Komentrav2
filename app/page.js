@@ -127,6 +127,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
   const [buttons, setButtons] = useState([{ title: '', url: '' }]);
   const [askToFollow, setAskToFollow] = useState(false);
   const [followMessage, setFollowMessage] = useState('');
+  const [followButtonText, setFollowButtonText] = useState('I Followed ✓');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -134,7 +135,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
       setSelectedAccount(''); setMedia([]); setSelectedPost(null); setName('');
       setKeywords([]); setKwInput(''); setMatchType('contains');
       setReplies(['', '', '']); setDmText(''); setButtons([{ title: '', url: '' }]);
-      setAskToFollow(false); setFollowMessage('');
+      setAskToFollow(false); setFollowMessage(''); setFollowButtonText('I Followed ✓');
     }
   }, [open]);
 
@@ -198,7 +199,8 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
           dmText: dmText.trim(),
           dmButtons: validButtons,
           askToFollow,
-          followMessage: askToFollow ? (followMessage.trim() || `Hey! Follow @${acct?.username || ''} first to unlock 🎁`) : null,
+          followMessage: askToFollow ? (followMessage.trim() || `Follow @${acct?.username || ''} first to unlock 🎁`) : null,
+          followButtonText: askToFollow ? (followButtonText.trim() || 'I Followed ✓') : null,
           igUsername: acct?.username,
         }),
       });
@@ -342,10 +344,20 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
                   <Switch checked={askToFollow} onCheckedChange={setAskToFollow} />
                 </div>
                 {askToFollow && (
-                  <div>
-                    <Label className="text-xs">Follow-prompt message</Label>
-                    <Textarea value={followMessage} onChange={(e) => setFollowMessage(e.target.value)}
-                      placeholder="Hey 👋  Follow us first to unlock the link!" rows={2} className="mt-1" />
+                  <div className="space-y-3">
+                    <div>
+                      <Label className="text-xs">Follow-prompt message</Label>
+                      <Textarea value={followMessage} onChange={(e) => setFollowMessage(e.target.value)}
+                        placeholder="Hey 👋  Follow us first to unlock the link!" rows={2} className="mt-1" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Confirmation button text</Label>
+                      <Input value={followButtonText} onChange={(e) => setFollowButtonText(e.target.value)}
+                        placeholder="I Followed ✓" className="mt-1" maxLength={20} />
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        After they tap this button in their DM, the main message + links will be sent. (We also include an "Open profile" button.)
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>

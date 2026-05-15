@@ -351,13 +351,14 @@ async function replyToComment(accessToken, commentId, message) {
   return { ok: r.ok, data: d };
 }
 
-async function sendDMText(accessToken, igUserId, recipientCommentId, message) {
+async function sendDMText(accessToken, recipient, message) {
+  // recipient = { comment_id } for first reply (private reply window) OR { id } once user is in active conversation
   const url = `https://graph.instagram.com/v22.0/me/messages?access_token=${encodeURIComponent(accessToken)}`;
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      recipient: { comment_id: recipientCommentId },
+      recipient,
       message: { text: message },
     }),
   });
@@ -365,13 +366,13 @@ async function sendDMText(accessToken, igUserId, recipientCommentId, message) {
   return { ok: r.ok, data: d };
 }
 
-async function sendDMButtons(accessToken, igUserId, recipientCommentId, text, buttons) {
+async function sendDMButtons(accessToken, recipient, text, buttons) {
   const url = `https://graph.instagram.com/v22.0/me/messages?access_token=${encodeURIComponent(accessToken)}`;
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      recipient: { comment_id: recipientCommentId },
+      recipient,
       message: {
         attachment: {
           type: 'template',
@@ -379,6 +380,37 @@ async function sendDMButtons(accessToken, igUserId, recipientCommentId, text, bu
             template_type: 'button',
             text,
             buttons: buttons.map(b => ({ type: 'web_url', url: b.url, title: b.title })),
+          },
+        },
+      },
+    }),
+  });
+  const d = await r.json();
+  return { ok: r.ok, data: d };
+}
+
+// Send a "Follow first" prompt with a postback button. When user taps "I Followed ✓",
+// Instagram will deliver a messaging.postback webhook back to us with our payload.
+async function sendFollowPrompt(accessToken, recipient, text, buttonTitle, automationId, igUsername) {
+  const url = `https://graph.instagram.com/v22.0/me/messages?access_token=${encodeURIComponent(accessToken)}`;
+  const buttons = [];
+  if (igUsername) {
+    buttons.push({ type: 'web_url', url: `https://instagram.com/${igUsername}`, title: `Open @${igUsername}` });
+  }
+  buttons.push({ type: 'postback', title: buttonTitle || 'I Followed ✓', payload: `RP_FOLLOW:${automationId}` });
+
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient,
+      message: {
+        attachment: {
+          type: 'template',
+          payload: {
+            template_type: 'button',
+            text,
+            buttons,
           },
         },
       },
@@ -478,23 +510,29 @@ async function handleWebhookEvent(req) {
                 const r1 = await replyToComment(acct.accessToken, commentId, reply);
                 console.log('Reply result', r1);
 
-                // Optional: send follow-prompt message first
-                let rFollow = null;
-                if (auto.askToFollow && auto.followMessage) {
-                  rFollow = await sendDMText(acct.accessToken, igUserId, commentId, auto.followMessage);
-                  console.log('Follow-prompt DM', rFollow);
-                }
-
-                // Main DM: with buttons if any, else plain text
-                const dmText = auto.dmText || auto.dmMessage || '';
-                const buttons = Array.isArray(auto.dmButtons) ? auto.dmButtons.filter(b => b.title && b.url).slice(0, 3) : [];
-                let r2;
-                if (buttons.length > 0) {
-                  r2 = await sendDMButtons(acct.accessToken, igUserId, commentId, dmText, buttons);
+                // Branch: askToFollow → send a single follow-prompt with postback button.
+                // Else → send the main DM straight away.
+                let rDM = null;
+                if (auto.askToFollow) {
+                  rDM = await sendFollowPrompt(
+                    acct.accessToken,
+                    { comment_id: commentId },
+                    auto.followMessage || `Follow @${acct.username} first to unlock 🎁`,
+                    auto.followButtonText || 'I Followed ✓',
+                    auto._id,
+                    acct.username,
+                  );
+                  console.log('Follow-prompt sent:', rDM);
                 } else {
-                  r2 = await sendDMText(acct.accessToken, igUserId, commentId, dmText);
+                  const dmText = auto.dmText || auto.dmMessage || '';
+                  const buttons = Array.isArray(auto.dmButtons) ? auto.dmButtons.filter(b => b.title && b.url).slice(0, 3) : [];
+                  if (buttons.length > 0) {
+                    rDM = await sendDMButtons(acct.accessToken, { comment_id: commentId }, dmText, buttons);
+                  } else {
+                    rDM = await sendDMText(acct.accessToken, { comment_id: commentId }, dmText);
+                  }
+                  console.log('DM result', rDM);
                 }
-                console.log('DM result', r2);
 
                 await db.collection('automation_runs').insertOne({
                   _id: uuidv4(),
@@ -504,14 +542,49 @@ async function handleWebhookEvent(req) {
                   commentText: v.text,
                   replyUsed: reply,
                   replyResult: r1,
-                  followResult: rFollow,
-                  dmResult: r2,
+                  dmResult: rDM,
+                  flow: auto.askToFollow ? 'follow-gated' : 'direct',
                   ranAt: new Date(),
                 });
               }
             }
           }
         }
+
+        // Handle messaging events (postback from "I Followed" button)
+        const messaging = entry.messaging || [];
+        for (const msg of messaging) {
+          if (msg.postback?.payload?.startsWith('RP_FOLLOW:')) {
+            const automationId = msg.postback.payload.slice('RP_FOLLOW:'.length);
+            const senderId = msg.sender?.id;
+            if (!senderId) continue;
+
+            const auto = await db.collection('automations').findOne({ _id: automationId });
+            if (!auto || !auto.isActive) {
+              console.log('Postback automation not found or inactive', automationId);
+              continue;
+            }
+            const acct = await db.collection('instagram_accounts').findOne({ _id: auto.instagramAccountId });
+            if (!acct) continue;
+
+            const dmText = auto.dmText || auto.dmMessage || '';
+            const buttons = Array.isArray(auto.dmButtons) ? auto.dmButtons.filter(b => b.title && b.url).slice(0, 3) : [];
+            let rDM;
+            if (buttons.length > 0) {
+              rDM = await sendDMButtons(acct.accessToken, { id: senderId }, dmText, buttons);
+            } else {
+              rDM = await sendDMText(acct.accessToken, { id: senderId }, dmText);
+            }
+            console.log('Post-follow DM sent to', senderId, ':', rDM);
+
+            await db.collection('automation_runs').insertOne({
+              _id: uuidv4(),
+              automationId: auto._id,
+              fromUserId: senderId,
+              dmResult: rDM,
+              flow: 'follow-confirmed',
+              ranAt: new Date(),
+            });
       }
     }
   } catch (e) {
