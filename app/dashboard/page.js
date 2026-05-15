@@ -24,7 +24,7 @@ function Logo() {
       <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/30">
         <Bot className="w-5 h-5 text-white" />
       </div>
-      <span className="text-xl font-extrabold tracking-tight">ReplyPilot</span>
+      <span className="text-xl font-extrabold tracking-tight">Komentra</span>
     </div>
   );
 }
@@ -125,7 +125,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
             <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center"><Wand2 className="w-5 h-5 text-white" /></div>
             New Automation
           </DialogTitle>
-          <DialogDescription>Configure how ReplyPilot reacts when someone comments on your post.</DialogDescription>
+          <DialogDescription>Configure how Komentra reacts when someone comments on your post.</DialogDescription>
         </DialogHeader>
 
         <div className="px-6 py-4 space-y-8">
@@ -170,7 +170,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
           {/* Step 3 */}
           {selectedPost && (
             <div className="space-y-3">
-              <SectionHeader icon={Sparkles} step="3" title="Trigger Words" subtitle="Words ReplyPilot listens for in comments." />
+              <SectionHeader icon={Sparkles} step="3" title="Trigger Words" subtitle="Words Komentra listens for in comments." />
               <div className="ml-11 space-y-3">
                 <div className="flex items-center gap-2">
                   <Input value={kwInput} onChange={(e) => setKwInput(e.target.value)}

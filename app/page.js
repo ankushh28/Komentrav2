@@ -26,7 +26,7 @@ export default function Home() {
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/30">
               <Bot className="w-5 h-5 text-white" />
             </div>
-            <span className="text-xl font-extrabold tracking-tight">ReplyPilot</span>
+            <span className="text-xl font-extrabold tracking-tight">Komentra</span>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={() => router.push('/auth?mode=login')}>Sign in</Button>
@@ -49,7 +49,7 @@ export default function Home() {
             Auto-reply to Instagram comments.<br />Send smart DMs on autopilot.
           </h1>
           <p className="text-lg md:text-xl text-muted-foreground mt-6 max-w-2xl mx-auto">
-            ReplyPilot listens for trigger words on your posts, replies publicly, and sends a personalized DM with link buttons — all in seconds. Optional follow-gating with real verification.
+            Komentra turns comments into quick replies and DMs, so interested people get the right link without manual follow-up.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center mt-8">
             <Button onClick={() => router.push('/auth?mode=signup')} size="lg" className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-xl shadow-violet-500/30 text-base px-8">
@@ -70,11 +70,11 @@ export default function Home() {
       {/* Feature grid */}
       <section className="container mx-auto px-4 pb-24">
         <h2 className="text-3xl md:text-4xl font-bold text-center mb-3">Everything you need. Nothing you don't.</h2>
-        <p className="text-center text-muted-foreground mb-12 max-w-2xl mx-auto">A focused toolkit, not a bloated platform. Get the core workflow that converts comments into customers.</p>
+        <p className="text-center text-muted-foreground mb-12 max-w-2xl mx-auto">Set up the replies, DMs, links, and follow checks your Instagram workflow needs.</p>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {[
             { icon: Zap, title: 'Multi-keyword triggers', desc: 'Add as many trigger words as you want. Choose match type: contains, exact, starts-with.', color: 'from-amber-400 to-orange-500' },
-            { icon: MessageSquare, title: '3 reply variants', desc: 'Avoid spammy repetition — we randomly pick from up to 3 of your replies for natural variety.', color: 'from-rose-400 to-fuchsia-500' },
+            { icon: MessageSquare, title: '3 reply variants', desc: 'Avoid spammy repetition. We randomly pick from up to 3 replies for natural variety.', color: 'from-rose-400 to-fuchsia-500' },
             { icon: Send, title: 'DMs with link buttons', desc: 'Send a button-template DM with up to 3 web links. Higher click-through than plain text.', color: 'from-indigo-400 to-violet-500' },
             { icon: UserCheck, title: 'Follow-gating, verified', desc: 'Require a follow first. We check Instagram\'s API to verify the actual follow before unlocking.', color: 'from-emerald-400 to-teal-500' },
             { icon: BarChart3, title: 'Real-time analytics', desc: 'Conversion funnel, top keywords, per-automation stats, recent matches — all in one dashboard.', color: 'from-cyan-400 to-blue-500' },
@@ -127,14 +127,14 @@ export default function Home() {
             <h3 className="text-3xl font-bold mb-3">Ready to convert comments into DMs?</h3>
             <p className="opacity-90 mb-8 max-w-xl mx-auto">Sign up free, connect your Instagram Business account, and have your first automation live in 2 minutes.</p>
             <Button onClick={() => router.push('/auth?mode=signup')} size="lg" variant="secondary" className="text-base px-8 shadow-lg">
-              Get started — it's free <ArrowRight className="w-5 h-5 ml-2" />
+              Get started free <ArrowRight className="w-5 h-5 ml-2" />
             </Button>
           </CardContent>
         </Card>
       </section>
 
       <footer className="border-t py-8 text-center text-sm text-muted-foreground">
-        © {new Date().getFullYear()} ReplyPilot · Built for creators
+        &copy; {new Date().getFullYear()} Komentra. Built for creators.
       </footer>
     </div>
   );

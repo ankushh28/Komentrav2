@@ -2,8 +2,8 @@ import './globals.css';
 import { Toaster } from '@/components/ui/sonner';
 
 export const metadata = {
-  title: 'ReplyPilot — Instagram Comment Automation',
-  description: 'Auto-reply to Instagram comments and send DMs based on trigger keywords.',
+  title: 'Komentra - Instagram Comment Automation',
+  description: 'Turn Instagram comments into replies and DMs with simple keyword automations.',
 };
 
 export default function RootLayout({ children }) {
