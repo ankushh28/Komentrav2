@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { getDb } from '@/lib/mongo';
 import { hashPassword, comparePassword, signToken, getUserFromRequest } from '@/lib/auth';
-import { sendOtpEmail, generateOtp } from '@/lib/email';
+import { sendOtpEmail, generateOtp, sendPasswordResetOtpEmail } from '@/lib/email';
 import { getQueue } from '@/lib/queue';
 
 const META_APP_ID = process.env.META_APP_ID;
@@ -752,7 +752,9 @@ async function dispatch(req, params, method) {
   if (path === '/auth/verify-otp' && method === 'POST') return handleVerifyOtp(req);
   if (path === '/auth/resend-otp' && method === 'POST') return handleResendOtp(req);
   if (path === '/auth/login' && method === 'POST') return handleLogin(req);
-  if (path === '/auth/me' && method === 'GET') return handleMe(req);
+if (path === '/auth/me' && method === 'GET') return handleMe(req);
+  if (path === '/auth/forgot-password' && method === 'POST') return handleForgotPassword(req);
+  if (path === '/auth/reset-password' && method === 'POST') return handleResetPassword(req);
 
   // Analytics
   if (path === '/analytics' && method === 'GET') return handleAnalytics(req);
@@ -805,4 +807,51 @@ export async function PUT(request, { params }) {
 }
 export async function DELETE(request, { params }) {
   return dispatch(request, params, 'DELETE');
+}
+
+async function handleForgotPassword(req) {
+  const { email } = await req.json();
+  if (!email) return json({ error: 'email required' }, 400);
+  const db = await getDb();
+  const user = await db.collection('users').findOne({ email });
+  // Always return success to avoid email enumeration; only send mail if user actually exists & is verified
+  if (user && user.emailVerified) {
+    const resetOtp = generateOtp();
+    const resetOtpExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 min
+    await db.collection('users').updateOne(
+      { _id: user._id },
+      { $set: { resetOtp, resetOtpExpiresAt, updatedAt: new Date() } },
+    );
+    try {
+      const r = await sendPasswordResetOtpEmail(email, resetOtp, user.username);
+      console.log('Password reset OTP email sent:', r?.data?.id || r);
+    } catch (e) {
+      console.error('Failed to send password reset email', e);
+      return json({ error: 'Failed to send reset email. Please try again.' }, 500);
+    }
+  }
+  return json({ sent: true, email });
+}
+
+async function handleResetPassword(req) {
+  const { email, otp, newPassword } = await req.json();
+  if (!email || !otp || !newPassword) return json({ error: 'email, otp and newPassword required' }, 400);
+  if (String(newPassword).length < 6) return json({ error: 'Password must be at least 6 characters' }, 400);
+  const db = await getDb();
+  const user = await db.collection('users').findOne({ email });
+  if (!user) return json({ error: 'Invalid code' }, 400);
+  if (!user.resetOtp || user.resetOtp !== otp) return json({ error: 'Invalid code' }, 400);
+  if (!user.resetOtpExpiresAt || new Date(user.resetOtpExpiresAt) < new Date()) {
+    return json({ error: 'Code expired. Request a new one.' }, 400);
+  }
+
+  await db.collection('users').updateOne(
+    { _id: user._id },
+    {
+      $set: { password: await hashPassword(newPassword), emailVerified: true, updatedAt: new Date() },
+      $unset: { resetOtp: '', resetOtpExpiresAt: '' },
+    },
+  );
+  const token = signToken({ userId: user._id, email: user.email, username: user.username });
+  return json({ token, user: { id: user._id, email: user.email, username: user.username } });
 }
