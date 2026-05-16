@@ -136,8 +136,7 @@ function buildAuthUrl(state) {
 async function handleConnect(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
-  // state = userId so we can identify in callback
-  const state = Buffer.from(JSON.stringify({ userId: u.userId, n: Date.now() })).toString('base64url');
+    const state = Buffer.from(JSON.stringify({ userId: u.userId, n: Date.now() })).toString('base64url');
   return json({ url: buildAuthUrl(state) });
 }
 
@@ -355,6 +354,15 @@ async function handleListMedia(req) {
   }
 }
 
+// Helper to remove surrounding quotes from keywords (handles JSON-encoded strings)
+function stripQuotes(str) {
+  let s = String(str || '').trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  return s.replace(/\\"/g, '"').replace(/\\'/g, "'");
+}
+
 // ----------- AUTOMATIONS -----------
 async function handleCreateAutomation(req) {
   const u = getUserFromRequest(req);
@@ -365,7 +373,7 @@ async function handleCreateAutomation(req) {
 
   if (type === 'dm_reply') {
     const { instagramAccountId, keywords, matchType, replyMessages, replyButtons, name, igUsername } = body;
-    const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : [];
+    const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => stripQuotes(String(k)).toLowerCase().trim()).filter(Boolean) : [];
     const cleanReplies = Array.isArray(replyMessages) ? replyMessages.map(s => String(s).trim()).filter(Boolean).slice(0, 3) : [];
     const cleanButtons = Array.isArray(replyButtons) ? replyButtons.filter(b => b && b.title && b.url).slice(0, 3) : [];
     if (!instagramAccountId || cleanKeywords.length === 0 || cleanReplies.length === 0) {
@@ -394,7 +402,7 @@ async function handleCreateAutomation(req) {
     keywords, matchType, replyMessages, dmText, dmButtons,
     askToFollow, followMessage, followButtonText, igUsername, name,
   } = body;
-  const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => String(k).toLowerCase().trim()).filter(Boolean) : [];
+  const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => stripQuotes(String(k)).toLowerCase().trim()).filter(Boolean) : [];
   const cleanReplies = Array.isArray(replyMessages) ? replyMessages.map(s => String(s).trim()).filter(Boolean).slice(0, 3) : [];
   const cleanButtons = Array.isArray(dmButtons) ? dmButtons.filter(b => b && b.title && b.url).slice(0, 3) : [];
   if (!instagramAccountId || !postId || cleanKeywords.length === 0 || cleanReplies.length === 0 || !dmText) {

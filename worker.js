@@ -103,10 +103,19 @@ async function checkUserFollowsBusiness(accessToken, igsid) {
   } catch (e) { return { ok: false, isFollowing: false, error: e.message }; }
 }
 
+// Helper to remove surrounding quotes from keywords (handles JSON-encoded strings)
+function stripQuotes(str) {
+  let s = String(str || '').trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  return s.replace(/\\"/g, '"').replace(/\\'/g, "'");
+}
+
 function matchesKeyword(text, keywords, matchType) {
   const t = (text || '').toLowerCase().trim();
   return keywords.some(k => {
-    const kw = String(k).toLowerCase().trim();
+    const kw = stripQuotes(String(k)).toLowerCase().trim();
     if (!kw) return false;
     if (matchType === 'exact') return t === kw;
     if (matchType === 'starts_with') return t.startsWith(kw);
