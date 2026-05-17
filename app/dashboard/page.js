@@ -1115,6 +1115,9 @@ export default function DashboardPage() {
             <Button variant="ghost" size="sm" onClick={() => router.push('/analytics')}>
               <BarChart3 className="w-4 h-4 mr-1" /> Analytics
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => router.push('/audience')}>
+              <Users className="w-4 h-4 mr-1" /> Audience
+            </Button>
             <span className="text-sm text-muted-foreground hidden sm:inline">{user.username || user.email}</span>
             <Button variant="ghost" size="sm" onClick={onLogout}><LogOut className="w-4 h-4 mr-1" /> Logout</Button>
           </div>
