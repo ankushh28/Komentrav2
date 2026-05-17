@@ -189,7 +189,7 @@ async function handleCallback(req) {
     const expiresIn = longData.expires_in || 3600;
 
     // 3) Fetch user info — get BOTH user_id (app-scoped) and id (page-scoped, used in webhooks)
-    const infoUrl = `https://graph.instagram.com/${API_VERSION}/me?fields=user_id,id,username,account_type&access_token=${accessToken}`;
+    const infoUrl = `https://graph.instagram.com/${API_VERSION}/me?fields=user_id,id,username,account_type,profile_picture_url&access_token=${accessToken}`;
     const infoRes = await fetch(infoUrl);
     const info = await infoRes.json();
     const instagramUserId = String(info.user_id || info.id || tokenUserId);
@@ -218,6 +218,7 @@ async function handleCallback(req) {
           instagramWebhookIds: [instagramUserId, info.id, tokenUserId].filter(Boolean).map(String),
           username: info.username || 'unknown',
           accountType: info.account_type || null,
+          pfp: info.profile_picture_url || null,
           accessToken,
           tokenExpiry: new Date(Date.now() + expiresIn * 1000),
           updatedAt: new Date(),
@@ -258,6 +259,7 @@ async function handleListAccounts(req) {
     username: a.username,
     accountType: a.accountType,
     tokenExpiry: a.tokenExpiry,
+    pfp: a.pfp,
   })) });
 }
 
@@ -293,6 +295,7 @@ async function handleResubscribe(req, accountId) {
           instagramAppScopedUserId: appScopedUserId,
           username: info.username || acct.username,
           accountType: info.account_type || acct.accountType || null,
+          pfp: info.profile_picture_url || acct.pfp || null,
           updatedAt: new Date(),
         },
         $addToSet: {

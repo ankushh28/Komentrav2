@@ -688,7 +688,13 @@ export default function DashboardPage() {
                 <Card key={a.id} className="hover:shadow-lg transition-shadow">
                   <CardContent className="p-5 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-fuchsia-500 via-violet-500 to-indigo-500 flex items-center justify-center shadow-md"><Instagram className="w-6 h-6 text-white" /></div>
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-fuchsia-500 via-violet-500 to-indigo-500 flex items-center justify-center shadow-md">
+                        {a.pfp ? (
+                          <img src={a.pfp} alt={a.username} className="w-full h-full object-cover rounded-full" />
+                        ) : (
+                          <Instagram className="w-6 h-6 text-white" />
+                        )}
+                      </div>
                       <div><p className="font-semibold">@{a.username}</p><p className="text-xs text-muted-foreground">{a.accountType || 'Business'}</p></div>
                     </div>
                     <div className="flex items-center gap-1">
