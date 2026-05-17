@@ -200,7 +200,6 @@ To go live (handle real, non-tester users), submit these permissions for App Rev
 - `instagram_business_basic`
 - `instagram_business_manage_comments`
 - `instagram_business_manage_messages`
-- `instagram_business_content_publish` (optional)
 
 ---
 
