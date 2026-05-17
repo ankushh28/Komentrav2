@@ -7,6 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { MongoClient } from 'mongodb';
@@ -36,6 +37,7 @@ let dbPromise = mongo.connect().then(() => mongo.db(process.env.DB_NAME || 'ig_a
 
 async function db() { return dbPromise; }
 let audienceIndexesPromise;
+let deliveryIndexesPromise;
 
 // ---- Instagram API helpers ----
 async function replyToComment(accessToken, commentId, message) {
@@ -152,6 +154,135 @@ function graphError(result) {
   return result?.data?.error?.message || result?.data?.error?.code || null;
 }
 
+function isDuplicateKeyError(error) {
+  return error?.code === 11000;
+}
+
+function serializeError(error) {
+  return {
+    message: error?.message || String(error),
+    name: error?.name || null,
+  };
+}
+
+function hashEventParts(parts) {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(parts))
+    .digest('hex')
+    .slice(0, 32);
+}
+
+function normalizedEventText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function dmSourceEventId(msg, senderId, recipientId, text) {
+  if (msg.message?.mid) return String(msg.message.mid);
+  return `fallback:${hashEventParts([
+    senderId || null,
+    recipientId || null,
+    msg.timestamp || null,
+    normalizedEventText(text),
+  ])}`;
+}
+
+function postbackSourceEventId(msg, senderId, recipientId) {
+  if (msg.postback?.mid) return String(msg.postback.mid);
+  if (msg.timestamp) return String(msg.timestamp);
+  return `fallback:${hashEventParts([
+    senderId || null,
+    recipientId || null,
+    msg.postback?.payload || null,
+  ])}`;
+}
+
+async function ensureDeliveryIndexes(dbi) {
+  if (!deliveryIndexesPromise) {
+    const expireAfterSeconds = parseInt(
+      process.env.AUTOMATION_DELIVERY_TTL_SECONDS || `${30 * 24 * 60 * 60}`,
+      10,
+    );
+    deliveryIndexesPromise = Promise.all([
+      dbi.collection('automation_deliveries').createIndex(
+        { createdAt: 1 },
+        { expireAfterSeconds: Number.isFinite(expireAfterSeconds) ? expireAfterSeconds : 30 * 24 * 60 * 60 },
+      ),
+      dbi.collection('automation_deliveries').createIndex({ automationId: 1, createdAt: -1 }),
+    ]).catch((e) => {
+      deliveryIndexesPromise = null;
+      logAutomation('delivery', 'index setup failed', { error: e?.message });
+    });
+  }
+  await deliveryIndexesPromise;
+}
+
+async function claimAutomationDelivery(dbi, {
+  key,
+  automationId,
+  workspaceId,
+  instagramAccountId,
+  flow,
+  sourceEventId,
+  jobId,
+}) {
+  await ensureDeliveryIndexes(dbi);
+  const now = new Date();
+  try {
+    await dbi.collection('automation_deliveries').insertOne({
+      _id: key,
+      automationId,
+      workspaceId: workspaceId || null,
+      instagramAccountId,
+      flow,
+      sourceEventId,
+      jobId: jobId || null,
+      status: 'claimed',
+      createdAt: now,
+      updatedAt: now,
+    });
+    return { claimed: true, key };
+  } catch (e) {
+    if (isDuplicateKeyError(e)) return { claimed: false, key };
+    throw e;
+  }
+}
+
+async function updateAutomationDelivery(dbi, key, set) {
+  try {
+    await dbi.collection('automation_deliveries').updateOne(
+      { _id: key },
+      { $set: { ...set, updatedAt: new Date() } },
+    );
+  } catch (e) {
+    logAutomation('delivery', 'delivery update failed', {
+      deliveryKey: key,
+      error: e?.message,
+    });
+  }
+}
+
+async function markDeliverySent(dbi, key, sendResult) {
+  await updateAutomationDelivery(dbi, key, {
+    status: 'sent',
+    sendResult,
+    sentAt: new Date(),
+  });
+}
+
+async function markDeliveryFailed(dbi, key, error) {
+  await updateAutomationDelivery(dbi, key, {
+    status: 'send_failed',
+    sendError: serializeError(error),
+  });
+}
+
+async function recordDeliveryPostProcessError(dbi, key, error) {
+  await updateAutomationDelivery(dbi, key, {
+    postProcessError: serializeError(error),
+  });
+}
+
 async function findConnectedAccountForMessaging(dbi, ids) {
   const candidates = [...new Set(ids.filter(Boolean).map(String))];
   if (candidates.length === 0) return null;
@@ -221,6 +352,12 @@ async function upsertAudienceMember(dbi, {
   const inc = { triggerCount: 1 };
   if (triggerType === 'comment') inc.commentTriggerCount = 1;
   if (triggerType === 'dm') inc.dmTriggerCount = 1;
+  const setOnInsert = {
+    _id: uuidv4(),
+    firstSeenAt: at,
+  };
+  if (!inc.commentTriggerCount) setOnInsert.commentTriggerCount = 0;
+  if (!inc.dmTriggerCount) setOnInsert.dmTriggerCount = 0;
 
   const set = {
     userId: auto.userId,
@@ -240,13 +377,7 @@ async function upsertAudienceMember(dbi, {
   const result = await dbi.collection('audience_members').findOneAndUpdate(
     { workspaceId: set.workspaceId, instagramScopedUserId: scopedId },
     {
-      $setOnInsert: {
-        _id: uuidv4(),
-        firstSeenAt: at,
-        commentTriggerCount: 0,
-        dmTriggerCount: 0,
-        triggerCount: 0,
-      },
+      $setOnInsert: setOnInsert,
       $set: set,
       $inc: inc,
     },
@@ -367,8 +498,29 @@ async function processJob(job) {
           });
           continue;
         }
+        const deliveryKey = `comment_dm:${auto._id}:${commentId}`;
+        const delivery = await claimAutomationDelivery(dbi, {
+          key: deliveryKey,
+          automationId: auto._id,
+          workspaceId: auto.workspaceId || acct.workspaceId || null,
+          instagramAccountId: auto.instagramAccountId,
+          flow: 'comment_dm',
+          sourceEventId: commentId,
+          jobId: job.id,
+        });
+        if (!delivery.claimed) {
+          logAutomation('comment-dm', 'duplicate delivery skipped', {
+            jobId: job.id,
+            automationId: auto._id,
+            deliveryKey,
+          });
+          continue;
+        }
         const reply = replies[Math.floor(Math.random() * replies.length)];
-        const r1 = await replyToComment(acct.accessToken, commentId, reply);
+        let r1 = null;
+        let rDM = null;
+        try {
+        r1 = await replyToComment(acct.accessToken, commentId, reply);
         logAutomation('comment-dm', 'public reply attempted', {
           jobId: job.id,
           automationId: auto._id,
@@ -376,7 +528,6 @@ async function processJob(job) {
           error: graphError(r1),
         });
 
-        let rDM = null;
         if (auto.askToFollow) {
           rDM = await sendFollowPrompt(
             acct.accessToken, { comment_id: commentId },
@@ -397,7 +548,23 @@ async function processJob(job) {
           ok: rDM?.ok,
           error: graphError(rDM),
         });
+          await markDeliverySent(dbi, deliveryKey, {
+            replyResult: r1,
+            dmResult: rDM,
+            flow: auto.askToFollow ? 'follow-gated' : 'direct',
+          });
+        } catch (e) {
+          await markDeliveryFailed(dbi, deliveryKey, e);
+          logAutomation('comment-dm', 'send failed after delivery claim', {
+            jobId: job.id,
+            automationId: auto._id,
+            deliveryKey,
+            error: e?.message,
+          });
+          continue;
+        }
 
+        try {
         const audienceMember = await upsertAudienceMember(dbi, {
           auto,
           acct,
@@ -420,6 +587,15 @@ async function processJob(job) {
           ranAt: new Date(),
         });
         console.log(`[worker] processed comment match for automation ${auto._id}`);
+        } catch (e) {
+          await recordDeliveryPostProcessError(dbi, deliveryKey, e);
+          logAutomation('comment-dm', 'post-send persistence failed', {
+            jobId: job.id,
+            automationId: auto._id,
+            deliveryKey,
+            error: e?.message,
+          });
+        }
       }
     }
 
@@ -488,11 +664,44 @@ async function processJob(job) {
           ok: followCheck.ok,
         });
         if (!followCheck.isFollowing) {
-          const retry = await sendFollowPrompt(
+          const sourceEventId = postbackSourceEventId(msg, senderId, recipientId);
+          const deliveryKey = `follow:${automationId}:${senderId}:${sourceEventId}`;
+          const delivery = await claimAutomationDelivery(dbi, {
+            key: deliveryKey,
+            automationId: auto._id,
+            workspaceId: auto.workspaceId || acct.workspaceId || null,
+            instagramAccountId: auto.instagramAccountId,
+            flow: 'follow-not-verified',
+            sourceEventId,
+            jobId: job.id,
+          });
+          if (!delivery.claimed) {
+            logAutomation('follow-gate', 'duplicate delivery skipped', {
+              jobId: job.id,
+              automationId,
+              deliveryKey,
+            });
+            continue;
+          }
+          let retry = null;
+          try {
+          retry = await sendFollowPrompt(
             acct.accessToken, { id: senderId },
             `Almost there! 🙏 We don't see your follow yet. Please follow @${acct.username} first, then tap below.`,
             auto.followButtonText || 'I Followed ✓', auto._id, acct.username,
           );
+          await markDeliverySent(dbi, deliveryKey, { retryResult: retry, followCheck });
+          } catch (e) {
+            await markDeliveryFailed(dbi, deliveryKey, e);
+            logAutomation('follow-gate', 'send failed after delivery claim', {
+              jobId: job.id,
+              automationId,
+              deliveryKey,
+              error: e?.message,
+            });
+            continue;
+          }
+          try {
           await dbi.collection('automation_runs').insertOne({
             _id: uuidv4(), automationId: auto._id, userId: auto.userId,
             workspaceId: auto.workspaceId || acct.workspaceId || null,
@@ -500,15 +709,57 @@ async function processJob(job) {
             fromUserId: senderId, flow: 'follow-not-verified',
             followCheck, retryResult: retry, ranAt: new Date(),
           });
+          } catch (e) {
+            await recordDeliveryPostProcessError(dbi, deliveryKey, e);
+            logAutomation('follow-gate', 'post-send persistence failed', {
+              jobId: job.id,
+              automationId,
+              deliveryKey,
+              error: e?.message,
+            });
+          }
           continue;
         }
 
         const dmText = auto.dmText || auto.dmMessage || '';
         const buttons = (auto.dmButtons || []).filter(b => b.title && b.url).slice(0, 3);
-        const rDM = buttons.length > 0
+        const sourceEventId = postbackSourceEventId(msg, senderId, recipientId);
+        const deliveryKey = `follow:${automationId}:${senderId}:${sourceEventId}`;
+        const delivery = await claimAutomationDelivery(dbi, {
+          key: deliveryKey,
+          automationId: auto._id,
+          workspaceId: auto.workspaceId || acct.workspaceId || null,
+          instagramAccountId: auto.instagramAccountId,
+          flow: 'follow-confirmed',
+          sourceEventId,
+          jobId: job.id,
+        });
+        if (!delivery.claimed) {
+          logAutomation('follow-gate', 'duplicate delivery skipped', {
+            jobId: job.id,
+            automationId,
+            deliveryKey,
+          });
+          continue;
+        }
+        let rDM = null;
+        try {
+        rDM = buttons.length > 0
           ? await sendDMButtons(acct.accessToken, { id: senderId }, dmText, buttons)
           : await sendDMText(acct.accessToken, { id: senderId }, dmText);
 
+        await markDeliverySent(dbi, deliveryKey, { dmResult: rDM, followCheck });
+        } catch (e) {
+          await markDeliveryFailed(dbi, deliveryKey, e);
+          logAutomation('follow-gate', 'send failed after delivery claim', {
+            jobId: job.id,
+            automationId,
+            deliveryKey,
+            error: e?.message,
+          });
+          continue;
+        }
+        try {
         await dbi.collection('automation_runs').insertOne({
           _id: uuidv4(), automationId: auto._id, userId: auto.userId,
           workspaceId: auto.workspaceId || acct.workspaceId || null,
@@ -517,6 +768,15 @@ async function processJob(job) {
           flow: 'follow-confirmed', followCheck, ranAt: new Date(),
         });
         console.log(`[worker] post-follow DM sent for ${automationId}`);
+        } catch (e) {
+          await recordDeliveryPostProcessError(dbi, deliveryKey, e);
+          logAutomation('follow-gate', 'post-send persistence failed', {
+            jobId: job.id,
+            automationId,
+            deliveryKey,
+            error: e?.message,
+          });
+        }
         continue;
       }
 
@@ -601,8 +861,30 @@ async function processJob(job) {
           }
           const reply = replies[Math.floor(Math.random() * replies.length)];
           const replyButtons = (auto.replyButtons || []).filter(b => b.title && b.url).slice(0, 3);
+          const sourceEventId = dmSourceEventId(msg, senderId, recipientId, incomingText);
+          const deliveryKey = `dm_reply:${auto._id}:${sourceEventId}`;
+          const delivery = await claimAutomationDelivery(dbi, {
+            key: deliveryKey,
+            automationId: auto._id,
+            workspaceId: auto.workspaceId || acct.workspaceId || null,
+            instagramAccountId: auto.instagramAccountId,
+            flow: 'dm_reply',
+            sourceEventId,
+            jobId: job.id,
+          });
+          if (!delivery.claimed) {
+            logAutomation('dm-auto-reply', 'duplicate delivery skipped', {
+              jobId: job.id,
+              automationId: auto._id,
+              senderId,
+              deliveryKey,
+            });
+            continue;
+          }
 
-          const r = replyButtons.length > 0
+          let r = null;
+          try {
+          r = replyButtons.length > 0
             ? await sendDMButtons(acct.accessToken, { id: senderId }, reply, replyButtons)
             : await sendDMText(acct.accessToken, { id: senderId }, reply);
         logAutomation('dm-auto-reply', 'reply send attempted', {
@@ -613,7 +895,20 @@ async function processJob(job) {
             error: graphError(r),
             buttons: replyButtons.length,
           });
+          await markDeliverySent(dbi, deliveryKey, { dmResult: r });
+          } catch (e) {
+            await markDeliveryFailed(dbi, deliveryKey, e);
+            logAutomation('dm-auto-reply', 'send failed after delivery claim', {
+              jobId: job.id,
+              automationId: auto._id,
+              senderId,
+              deliveryKey,
+              error: e?.message,
+            });
+            continue;
+          }
 
+          try {
           const profile = await getUserProfile(acct.accessToken, senderId);
           const audienceMember = await upsertAudienceMember(dbi, {
             auto,
@@ -646,6 +941,16 @@ async function processJob(job) {
             automationId: auto._id,
             senderId,
           });
+          } catch (e) {
+            await recordDeliveryPostProcessError(dbi, deliveryKey, e);
+            logAutomation('dm-auto-reply', 'post-send persistence failed', {
+              jobId: job.id,
+              automationId: auto._id,
+              senderId,
+              deliveryKey,
+              error: e?.message,
+            });
+          }
         }
       } else if (!incomingText) {
         logAutomation('dm-auto-reply', 'skipped messaging event without text', {
