@@ -1154,10 +1154,7 @@ export default function DashboardPage() {
             {!workspaceActive && <Badge className="bg-slate-100 text-slate-600">Disabled</Badge>}
           </div>
         )}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
-          <Card className="border-0 shadow-sm bg-gradient-to-br from-indigo-500 to-violet-600 text-white">
-            <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">Connected Accounts</p><p className="text-3xl font-bold">{accounts.length}</p></CardContent>
-          </Card>
+        <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mb-10">
           <Card className="border-0 shadow-sm bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white">
             <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">Total Automations</p><p className="text-3xl font-bold">{automations.length}</p></CardContent>
           </Card>
@@ -1194,7 +1191,7 @@ export default function DashboardPage() {
                           <Instagram className="w-6 h-6 text-white" />
                         )}
                       </div>
-                      <div><p className="font-semibold">@{a.username}</p><p className="text-xs text-muted-foreground">{a.accountType || 'Business'}</p></div>
+                      <div><p className="font-semibold">@{a.username}</p></div>
                     </div>
                     <div className="flex items-center gap-1">
                       <Button variant="ghost" size="icon" title="Disconnect" disabled={!workspaceActive} onClick={() => disconnectAccount(a.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>

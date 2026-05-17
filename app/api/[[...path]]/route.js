@@ -54,6 +54,8 @@ async function ensureWorkspaceIndexes(db) {
       db.collection('instagram_accounts').createIndex({ connectedUserId: 1, workspaceId: 1 }),
       db.collection('automations').createIndex({ userId: 1, workspaceId: 1 }),
       db.collection('automation_runs').createIndex({ userId: 1, workspaceId: 1, ranAt: -1 }),
+      db.collection('audience_members').createIndex({ workspaceId: 1, instagramScopedUserId: 1 }, { unique: true }),
+      db.collection('audience_members').createIndex({ userId: 1, workspaceId: 1, lastTriggeredAt: -1 }),
     ]).catch((e) => {
       workspaceIndexesPromise = null;
       console.error('[workspaces] index setup failed', e?.message);
@@ -253,6 +255,110 @@ async function handleDeleteWorkspace(req, id) {
     db.collection('workspaces').deleteOne({ _id: id, ownerUserId: u.userId }),
   ]);
   return json({ success: true });
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function csvCell(value) {
+  const text = value == null ? '' : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function audienceLabel(member) {
+  return member.username ? `@${member.username}` : (member.displayName || member.instagramScopedUserId || 'Unknown');
+}
+
+async function getAudienceForRequest(req) {
+  const u = getUserFromRequest(req);
+  if (!u) return { response: json({ error: 'Unauthorized' }, 401) };
+  const db = await getDb();
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId);
+  if (error) return { response: error };
+  return { db, user: u, workspace };
+}
+
+async function handleListAudience(req) {
+  const ctx = await getAudienceForRequest(req);
+  if (ctx.response) return ctx.response;
+  const { db, user, workspace } = ctx;
+  const url = new URL(req.url);
+  const search = url.searchParams.get('search')?.trim();
+  const query = { userId: user.userId, workspaceId: workspace._id };
+  if (search) {
+    const pattern = new RegExp(escapeRegex(search), 'i');
+    query.$or = [
+      { username: pattern },
+      { displayName: pattern },
+      { instagramScopedUserId: pattern },
+      { lastAutomationName: pattern },
+      { lastMessageText: pattern },
+    ];
+  }
+  const members = await db.collection('audience_members')
+    .find(query)
+    .sort({ lastTriggeredAt: -1, updatedAt: -1 })
+    .limit(1000)
+    .toArray();
+
+  return json({
+    audience: members.map(member => ({
+      id: member._id,
+      userId: member.userId,
+      workspaceId: member.workspaceId,
+      instagramAccountId: member.instagramAccountId,
+      instagramScopedUserId: member.instagramScopedUserId,
+      username: member.username || null,
+      displayName: member.displayName || null,
+      label: audienceLabel(member),
+      triggerCount: member.triggerCount || 0,
+      commentTriggerCount: member.commentTriggerCount || 0,
+      dmTriggerCount: member.dmTriggerCount || 0,
+      firstSeenAt: member.firstSeenAt || null,
+      lastSeenAt: member.lastSeenAt || null,
+      lastTriggeredAt: member.lastTriggeredAt || null,
+      lastAutomationId: member.lastAutomationId || null,
+      lastAutomationName: member.lastAutomationName || null,
+      lastMessageText: member.lastMessageText || null,
+    })),
+  });
+}
+
+async function handleExportAudience(req) {
+  const ctx = await getAudienceForRequest(req);
+  if (ctx.response) return ctx.response;
+  const { db, user, workspace } = ctx;
+  const members = await db.collection('audience_members')
+    .find({ userId: user.userId, workspaceId: workspace._id })
+    .sort({ lastTriggeredAt: -1, updatedAt: -1 })
+    .toArray();
+
+  const rows = [
+    ['Username', 'Display Name', 'Instagram User ID', 'Total Triggers', 'Comment Triggers', 'DM Triggers', 'First Seen', 'Last Seen', 'Last Triggered', 'Last Automation', 'Last Message'],
+    ...members.map(member => [
+      member.username ? `@${member.username}` : '',
+      member.displayName || '',
+      member.instagramScopedUserId || '',
+      member.triggerCount || 0,
+      member.commentTriggerCount || 0,
+      member.dmTriggerCount || 0,
+      member.firstSeenAt ? new Date(member.firstSeenAt).toISOString() : '',
+      member.lastSeenAt ? new Date(member.lastSeenAt).toISOString() : '',
+      member.lastTriggeredAt ? new Date(member.lastTriggeredAt).toISOString() : '',
+      member.lastAutomationName || '',
+      member.lastMessageText || '',
+    ]),
+  ];
+  const csv = rows.map(row => row.map(csvCell).join(',')).join('\n');
+  const filename = `${cleanWorkspaceName(workspace.name).replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'workspace'}-audience.csv`;
+  return new NextResponse(csv, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    },
+  });
 }
 
 // ----------- AUTH HANDLERS -----------
@@ -1267,6 +1373,10 @@ if (path === '/auth/me' && method === 'GET') return handleMe(req);
     const id = path.split('/')[2];
     return handleDeleteWorkspace(req, id);
   }
+
+  // Audience
+  if (path === '/audience' && method === 'GET') return handleListAudience(req);
+  if (path === '/audience/export' && method === 'GET') return handleExportAudience(req);
 
   // Analytics
   if (path === '/analytics' && method === 'GET') return handleAnalytics(req);

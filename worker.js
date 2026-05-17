@@ -35,6 +35,7 @@ const mongo = new MongoClient(process.env.MONGO_URL);
 let dbPromise = mongo.connect().then(() => mongo.db(process.env.DB_NAME || 'ig_automation'));
 
 async function db() { return dbPromise; }
+let audienceIndexesPromise;
 
 // ---- Instagram API helpers ----
 async function replyToComment(accessToken, commentId, message) {
@@ -101,6 +102,17 @@ async function checkUserFollowsBusiness(accessToken, igsid) {
     const d = await r.json();
     return { ok: r.ok, isFollowing: d.is_user_follow_business === true, raw: d };
   } catch (e) { return { ok: false, isFollowing: false, error: e.message }; }
+}
+
+async function getUserProfile(accessToken, igsid) {
+  const url = `https://graph.instagram.com/v22.0/${igsid}?fields=name,username&access_token=${encodeURIComponent(accessToken)}`;
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    return { ok: r.ok, username: d.username || null, displayName: d.name || null, raw: d };
+  } catch (e) {
+    return { ok: false, username: null, displayName: null, error: e.message };
+  }
 }
 
 // Helper to remove surrounding quotes from keywords (handles JSON-encoded strings)
@@ -176,6 +188,73 @@ async function rememberWebhookIds(dbi, accountId, ids) {
   );
 }
 
+async function ensureAudienceIndexes(dbi) {
+  if (!audienceIndexesPromise) {
+    audienceIndexesPromise = Promise.all([
+      dbi.collection('audience_members').createIndex({ workspaceId: 1, instagramScopedUserId: 1 }, { unique: true }),
+      dbi.collection('audience_members').createIndex({ userId: 1, workspaceId: 1, lastTriggeredAt: -1 }),
+    ]).catch((e) => {
+      audienceIndexesPromise = null;
+      logAutomation('audience', 'index setup failed', { error: e?.message });
+    });
+  }
+  await audienceIndexesPromise;
+}
+
+async function upsertAudienceMember(dbi, {
+  auto,
+  acct,
+  instagramScopedUserId,
+  username = null,
+  displayName = null,
+  triggerType,
+  text,
+  at = new Date(),
+}) {
+  const scopedId = instagramScopedUserId
+    ? String(instagramScopedUserId)
+    : (username ? `username:${String(username).toLowerCase()}` : null);
+  if (!scopedId || !auto?.userId || !acct?._id || !(auto.workspaceId || acct.workspaceId)) {
+    return null;
+  }
+  await ensureAudienceIndexes(dbi);
+  const inc = { triggerCount: 1 };
+  if (triggerType === 'comment') inc.commentTriggerCount = 1;
+  if (triggerType === 'dm') inc.dmTriggerCount = 1;
+
+  const set = {
+    userId: auto.userId,
+    workspaceId: auto.workspaceId || acct.workspaceId,
+    instagramAccountId: auto.instagramAccountId || acct._id,
+    instagramScopedUserId: scopedId,
+    lastSeenAt: at,
+    lastTriggeredAt: at,
+    lastAutomationId: auto._id,
+    lastAutomationName: auto.name || (auto.keywords && auto.keywords[0]) || auto.triggerWord || 'Automation',
+    lastMessageText: String(text || '').slice(0, 1000),
+    updatedAt: at,
+  };
+  if (username) set.username = String(username).replace(/^@/, '');
+  if (displayName) set.displayName = displayName;
+
+  const result = await dbi.collection('audience_members').findOneAndUpdate(
+    { workspaceId: set.workspaceId, instagramScopedUserId: scopedId },
+    {
+      $setOnInsert: {
+        _id: uuidv4(),
+        firstSeenAt: at,
+        commentTriggerCount: 0,
+        dmTriggerCount: 0,
+        triggerCount: 0,
+      },
+      $set: set,
+      $inc: inc,
+    },
+    { upsert: true, returnDocument: 'after' },
+  );
+  return result.value || result;
+}
+
 // ---- Job processor ----
 async function processJob(job) {
   const body = job.data;
@@ -212,6 +291,7 @@ async function processJob(job) {
       const commentId = v.id;
       const mediaId = v.media?.id || v.media_id;
       const fromId = v.from?.id;
+      const fromUsername = v.from?.username || null;
       if (!commentId || !mediaId) {
         logAutomation('comment-dm', 'skipped comment event missing ids', {
           jobId: job.id,
@@ -226,6 +306,7 @@ async function processJob(job) {
         mediaId,
         commentId,
         fromId: fromId || null,
+        fromUsername,
         text: textPreview(v.text),
       });
 
@@ -317,13 +398,23 @@ async function processJob(job) {
           error: graphError(rDM),
         });
 
+        const audienceMember = await upsertAudienceMember(dbi, {
+          auto,
+          acct,
+          instagramScopedUserId: fromId,
+          username: fromUsername,
+          triggerType: 'comment',
+          text: v.text,
+        });
+
         await dbi.collection('automation_runs').insertOne({
           _id: uuidv4(),
           automationId: auto._id,
           userId: auto.userId,
           workspaceId: auto.workspaceId || acct.workspaceId || null,
           instagramAccountId: auto.instagramAccountId,
-          commentId, fromUserId: fromId, commentText: v.text,
+          audienceMemberId: audienceMember?._id || null,
+          commentId, fromUserId: fromId, fromUsername, fromDisplayName: null, commentText: v.text,
           replyUsed: reply, replyResult: r1, dmResult: rDM,
           flow: auto.askToFollow ? 'follow-gated' : 'direct',
           ranAt: new Date(),
@@ -514,13 +605,24 @@ async function processJob(job) {
           const r = replyButtons.length > 0
             ? await sendDMButtons(acct.accessToken, { id: senderId }, reply, replyButtons)
             : await sendDMText(acct.accessToken, { id: senderId }, reply);
-          logAutomation('dm-auto-reply', 'reply send attempted', {
-            jobId: job.id,
-            automationId: auto._id,
+        logAutomation('dm-auto-reply', 'reply send attempted', {
+          jobId: job.id,
+          automationId: auto._id,
             senderId,
             ok: r.ok,
             error: graphError(r),
             buttons: replyButtons.length,
+          });
+
+          const profile = await getUserProfile(acct.accessToken, senderId);
+          const audienceMember = await upsertAudienceMember(dbi, {
+            auto,
+            acct,
+            instagramScopedUserId: senderId,
+            username: profile.ok ? profile.username : null,
+            displayName: profile.ok ? profile.displayName : null,
+            triggerType: 'dm',
+            text: incomingText,
           });
 
           await dbi.collection('automation_runs').insertOne({
@@ -529,7 +631,10 @@ async function processJob(job) {
             userId: auto.userId,
             workspaceId: auto.workspaceId || acct.workspaceId || null,
             instagramAccountId: auto.instagramAccountId,
+            audienceMemberId: audienceMember?._id || null,
             fromUserId: senderId,
+            fromUsername: profile.ok ? profile.username : null,
+            fromDisplayName: profile.ok ? profile.displayName : null,
             commentText: incomingText, // re-use field for analytics
             replyUsed: reply,
             dmResult: r,
