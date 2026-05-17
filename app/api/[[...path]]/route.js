@@ -134,9 +134,24 @@ function buildAuthUrl(state) {
 
 async function handleConnect(req) {
   const u = getUserFromRequest(req);
-  if (!u) return json({ error: 'Unauthorized' }, 401);
-    const state = Buffer.from(JSON.stringify({ userId: u.userId, n: Date.now() })).toString('base64url');
-  return json({ url: buildAuthUrl(state) });
+
+  if (!u) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  const db = await getDb();
+
+  const state = crypto.randomUUID();
+
+  await db.collection('oauth_states').insertOne({
+    state,
+    userId: u.userId,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 min
+  });
+
+  return json({
+    url: buildAuthUrl(state)
+  });
 }
 
 async function handleCallback(req) {
@@ -150,16 +165,24 @@ async function handleCallback(req) {
   if (!code || !state) {
     return NextResponse.redirect(`${BASE_URL}/?ig=error&msg=missing_code`);
   }
-  let parsed;
-  try {
-    parsed = JSON.parse(Buffer.from(state, 'base64url').toString());
-  } catch (e) {
-    return NextResponse.redirect(`${BASE_URL}/?ig=error&msg=bad_state`);
+  const db = await getDb();
+  const stateRecord = await db.collection('oauth_states')
+    .findOneAndDelete({ state, expiresAt: { $gt: new Date() } })
+
+  if (!stateRecord) {
+    return NextResponse.redirect(
+      `${BASE_URL}/?ig=error&msg=invalid_state`
+    );
   }
-  const userId = parsed.userId;
+  if (stateRecord.expiresAt < new Date()) {
+    return NextResponse.redirect(
+      `${BASE_URL}/?ig=error&msg=expired_state`
+    );
+  }
+
+  const userId = stateRecord.userId;
 
   try {
-    // 1) Exchange code for short-lived token
     const form = new URLSearchParams();
     form.set('client_id', META_APP_ID);
     form.set('client_secret', META_APP_SECRET);
@@ -381,6 +404,16 @@ async function handleCreateAutomation(req) {
     if (!instagramAccountId || cleanKeywords.length === 0 || cleanReplies.length === 0) {
       return json({ error: 'Need an account, at least 1 keyword, and 1 reply variant.' }, 400);
     }
+    const account = await db.collection('instagram_accounts').findOne({
+      _id: instagramAccountId,
+      connectedUserId: u.userId
+    });
+
+    if (!account) {
+      return json({
+        error: 'Please refresh your connected Instagram accounts and try again.'
+      }, 403);
+  }
     const doc = {
       _id: uuidv4(),
       userId: u.userId,
@@ -391,7 +424,7 @@ async function handleCreateAutomation(req) {
       matchType: ['exact', 'contains', 'starts_with'].includes(matchType) ? matchType : 'contains',
       replyMessages: cleanReplies,
       replyButtons: cleanButtons,
-      igUsername: igUsername || null,
+      igUsername: u.username || null,
       isActive: true,
       createdAt: new Date(),
     };
@@ -410,6 +443,16 @@ async function handleCreateAutomation(req) {
   if (!instagramAccountId || !postId || cleanKeywords.length === 0 || cleanReplies.length === 0 || !dmText) {
     return json({ error: 'Missing fields. Need at least 1 keyword, 1 reply variant and a DM message.' }, 400);
   }
+  const account = await db.collection('instagram_accounts').findOne({
+      _id: instagramAccountId,
+      connectedUserId: u.userId
+    });
+
+    if (!account) {
+      return json({
+        error: 'Please refresh your connected Instagram accounts and try again.'
+      }, 403);
+  }
   const doc = {
     _id: uuidv4(),
     userId: u.userId,
@@ -425,9 +468,9 @@ async function handleCreateAutomation(req) {
     dmText: String(dmText),
     dmButtons: cleanButtons,
     askToFollow: !!askToFollow,
-    followMessage: askToFollow ? (followMessage || `Follow @${igUsername || ''} first to unlock this!`) : null,
-    followButtonText: askToFollow ? (followButtonText || 'I Followed ✓') : null,
-    igUsername: igUsername || null,
+    followMessage: askToFollow ? (followMessage || `Follow @${u.username || ''} first to unlock this!`) : null,
+    followButtonText: askToFollow ? (followButtonText || 'I Followed ✅') : null,
+    igUsername: u.username || null,
     isActive: true,
     createdAt: new Date(),
     triggerWord: cleanKeywords[0],
@@ -613,22 +656,32 @@ function summarizeWebhook(body) {
 
 async function handleWebhookEvent(req) {
   const rawBody = await req.text();
+
+  const signature = req.headers.get('x-hub-signature-256');
+
+  const isValid = verifyMetaSignature(rawBody, signature);
+
+  if (!isValid) {
+    console.error('[webhook] invalid signature');
+
+    return new NextResponse('invalid signature', {
+      status: 401
+    });
+  }
   let body;
   try { body = JSON.parse(rawBody); } catch (e) { return new NextResponse('bad json', { status: 400 }); }
   const summary = summarizeWebhook(body);
   console.log('[webhook] event received', JSON.stringify(summary));
 
-  // Best-effort raw archive (non-blocking)
   try {
     const db = await getDb();
-    db.collection('webhook_events').insertOne({ _id: uuidv4(), receivedAt: new Date(), payload: body })
+    void db.collection('webhook_events').insertOne({ _id: uuidv4(), receivedAt: new Date(), payload: body })
       .then(() => console.log('[webhook] archived event'))
       .catch((e) => console.error('[webhook] archive error', e?.message));
   } catch (e) {
     console.error('[webhook] archive setup error', e?.message);
   }
 
-  // Push to BullMQ for async processing — return 200 immediately to Meta
   try {
     const q = getQueue();
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -636,11 +689,29 @@ async function handleWebhookEvent(req) {
     console.log('[webhook] enqueued event', JSON.stringify({ jobId: job.id, ...summary }));
   } catch (e) {
     console.error('[webhook] queue error', e?.message);
+    return new NextResponse('queue error', { status: 500 });
   }
 
   return new NextResponse('EVENT_RECEIVED', { status: 200 });
 }
 
+function verifyMetaSignature(rawBody, signature) {
+  if (!signature) {
+    return false;
+  }
+
+  const expectedSignature =
+    'sha256=' +
+    crypto
+      .createHmac('sha256', process.env.META_APP_SECRET)
+      .update(rawBody, 'utf8')
+      .digest('hex');
+
+  return crypto.timingSafeEqual(
+    Buffer.from(expectedSignature),
+    Buffer.from(signature)
+  );
+}
 // ----------- ANALYTICS -----------
 async function handleAnalytics(req) {
   const u = getUserFromRequest(req);
