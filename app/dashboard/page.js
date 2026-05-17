@@ -13,9 +13,10 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import {
-  Instagram, LogOut, Plus, Trash2, Zap, MessageSquare, Send, Sparkles,
-  CheckCircle2, ExternalLink, RefreshCw, Activity, UserPlus, Link as LinkIcon,
+  Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
+  CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, Bot, ChevronRight, BarChart3, MessageCircle, Inbox,
+  Pencil,
 } from 'lucide-react';
 
 function Logo() {
@@ -41,6 +42,72 @@ function SectionHeader({ icon: Icon, step, title, subtitle }) {
   );
 }
 
+function paddedVariants(values) {
+  const clean = Array.isArray(values) ? values.filter(Boolean).slice(0, 3) : [];
+  return [...clean, '', '', ''].slice(0, 3);
+}
+
+function keywordList(a) {
+  return a?.keywords?.length ? a.keywords : (a?.triggerWord ? [a.triggerWord] : []);
+}
+
+function runLabel(count = 0) {
+  return `${count} ${count === 1 ? 'run' : 'runs'}`;
+}
+
+function triggerLabel(a) {
+  return a?.type === 'dm_reply' ? 'When user sends DM' : 'When user comments';
+}
+
+function matchLabel(matchType) {
+  if (matchType === 'exact') return 'exactly';
+  if (matchType === 'starts_with') return 'starts with';
+  return 'contains';
+}
+
+function AutomationTypeDialog({ open, onOpenChange, onSelect }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>New Automation</DialogTitle>
+          <DialogDescription>Choose how Komentra should respond.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 py-2">
+          <button
+            type="button"
+            onClick={() => onSelect('comment_dm')}
+            className="flex items-center gap-4 rounded-xl border p-4 text-left transition hover:border-violet-300 hover:bg-violet-50"
+          >
+            <div className="w-11 h-11 rounded-xl bg-violet-100 flex items-center justify-center">
+              <MessageCircle className="w-5 h-5 text-violet-600" />
+            </div>
+            <div className="flex-1">
+              <p className="font-semibold text-base">Comment to DM</p>
+              <p className="text-sm text-muted-foreground">Reply when someone comments on a post.</p>
+            </div>
+            <ChevronRight className="w-4 h-4 text-muted-foreground" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelect('dm_reply')}
+            className="flex items-center gap-4 rounded-xl border p-4 text-left transition hover:border-cyan-300 hover:bg-cyan-50"
+          >
+            <div className="w-11 h-11 rounded-xl bg-cyan-100 flex items-center justify-center">
+              <Inbox className="w-5 h-5 text-cyan-600" />
+            </div>
+            <div className="flex-1">
+              <p className="font-semibold text-base">DM Auto-Reply</p>
+              <p className="text-sm text-muted-foreground">Reply when someone sends a keyword in DM.</p>
+            </div>
+            <ChevronRight className="w-4 h-4 text-muted-foreground" />
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated }) {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [media, setMedia] = useState([]);
@@ -55,7 +122,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
   const [buttons, setButtons] = useState([{ title: '', url: '' }]);
   const [askToFollow, setAskToFollow] = useState(false);
   const [followMessage, setFollowMessage] = useState('');
-  const [followButtonText, setFollowButtonText] = useState('I Followed ✓');
+  const [followButtonText, setFollowButtonText] = useState('I Followed');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -63,7 +130,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
       setSelectedAccount(''); setMedia([]); setSelectedPost(null); setName('');
       setKeywords([]); setKwInput(''); setMatchType('contains');
       setReplies(['', '', '']); setDmText(''); setButtons([{ title: '', url: '' }]);
-      setAskToFollow(false); setFollowMessage(''); setFollowButtonText('I Followed ✓');
+      setAskToFollow(false); setFollowMessage(''); setFollowButtonText('I Followed');
     }
   }, [open]);
 
@@ -103,9 +170,8 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
           keywords, matchType, replyMessages: validReplies,
           dmText: dmText.trim(), dmButtons: validButtons,
           askToFollow,
-          followMessage: askToFollow ? (followMessage.trim() || `Follow @${acct?.username || ''} first to unlock 🎁`) : null,
-          followButtonText: askToFollow ? (followButtonText.trim() || 'I Followed ✓') : null,
-          igUsername: acct?.username,
+          followMessage: askToFollow ? (followMessage.trim() || `Follow @${acct?.username || ''} first to unlock this!`) : null,
+          followButtonText: askToFollow ? (followButtonText.trim() || 'I Followed') : null,
         }),
       });
       const data = await res.json();
@@ -170,7 +236,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
           {/* Step 3 */}
           {selectedPost && (
             <div className="space-y-3">
-              <SectionHeader icon={Sparkles} step="3" title="Trigger Words" subtitle="Words Komentra listens for in comments." />
+              <SectionHeader icon={Sparkles} step="3" title="When user comments" subtitle="Keywords Komentra listens for on this post." />
               <div className="ml-11 space-y-3">
                 <div className="flex items-center gap-2">
                   <Input value={kwInput} onChange={(e) => setKwInput(e.target.value)}
@@ -189,7 +255,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
                   </div>
                 )}
                 <div className="flex items-center gap-3">
-                  <Label className="text-sm">Match type:</Label>
+                  <Label className="text-sm">Comment match:</Label>
                   <Select value={matchType} onValueChange={setMatchType}>
                     <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -242,7 +308,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
                     <div>
                       <Label className="text-xs">Confirmation button text</Label>
                       <Input value={followButtonText} onChange={(e) => setFollowButtonText(e.target.value)}
-                        placeholder="I Followed ✓" className="mt-1" maxLength={20} />
+                        placeholder="I Followed" className="mt-1" maxLength={20} />
                     </div>
                   </div>
                 )}
@@ -324,7 +390,6 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, onCreated })
     if (!canCreate) { toast.error('Fill in the required steps first'); return; }
     setSaving(true);
     try {
-      const acct = accounts.find(a => a.id === selectedAccount);
       const res = await fetch('/api/automations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -335,7 +400,6 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, onCreated })
           keywords, matchType,
           replyMessages: validReplies,
           replyButtons: validButtons,
-          igUsername: acct?.username,
         }),
       });
       const data = await res.json();
@@ -375,7 +439,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, onCreated })
 
           {selectedAccount && (
             <div className="space-y-3">
-              <SectionHeader icon={Sparkles} step="2" title="Trigger Keywords" subtitle="When a DM contains these, auto-reply fires." />
+              <SectionHeader icon={Sparkles} step="2" title="When user sends DM" subtitle="Keywords Komentra listens for in direct messages." />
               <div className="ml-11 space-y-3">
                 <div className="flex items-center gap-2">
                   <Input value={kwInput} onChange={(e) => setKwInput(e.target.value)}
@@ -463,22 +527,284 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, onCreated })
   );
 }
 
-function AutomationCard({ a, accounts, onToggle, onDelete }) {
+function EditAutomationDialog({ automation, accounts, token, onOpenChange, onSaved }) {
+  const open = !!automation;
+  const isDmReply = automation?.type === 'dm_reply';
+  const [selectedAccount, setSelectedAccount] = useState('');
+  const [media, setMedia] = useState([]);
+  const [loadingMedia, setLoadingMedia] = useState(false);
+  const [selectedPost, setSelectedPost] = useState(null);
+  const [name, setName] = useState('');
+  const [keywords, setKeywords] = useState([]);
+  const [kwInput, setKwInput] = useState('');
+  const [matchType, setMatchType] = useState('contains');
+  const [replies, setReplies] = useState(['', '', '']);
+  const [dmText, setDmText] = useState('');
+  const [buttons, setButtons] = useState([]);
+  const [askToFollow, setAskToFollow] = useState(false);
+  const [followMessage, setFollowMessage] = useState('');
+  const [followButtonText, setFollowButtonText] = useState('I Followed');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!automation) return;
+    const currentPost = automation.type === 'dm_reply' ? null : {
+      id: automation.postId,
+      permalink: automation.postPermalink,
+      thumbnail_url: automation.postThumbnail,
+      media_url: automation.postThumbnail,
+    };
+    setSelectedAccount(automation.instagramAccountId || '');
+    setSelectedPost(currentPost);
+    setName(automation.name || '');
+    setKeywords(keywordList(automation));
+    setKwInput('');
+    setMatchType(automation.matchType || 'contains');
+    setReplies(paddedVariants(automation.replyMessages || (automation.replyMessage ? [automation.replyMessage] : [])));
+    setDmText(automation.dmText || automation.dmMessage || '');
+    setButtons(automation.type === 'dm_reply' ? (automation.replyButtons || []) : (automation.dmButtons || []));
+    setAskToFollow(!!automation.askToFollow);
+    setFollowMessage(automation.followMessage || '');
+    setFollowButtonText(automation.followButtonText || 'I Followed');
+  }, [automation]);
+
+  useEffect(() => {
+    if (!open || !selectedAccount || isDmReply) return;
+    setLoadingMedia(true);
+    fetch(`/api/instagram/media?accountId=${selectedAccount}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(d => setMedia(d.media || []))
+      .catch(() => toast.error('Failed to load posts'))
+      .finally(() => setLoadingMedia(false));
+  }, [open, selectedAccount, isDmReply, token]);
+
+  const addKeyword = () => {
+    const k = kwInput.trim().toLowerCase();
+    if (k && !keywords.includes(k)) setKeywords([...keywords, k]);
+    setKwInput('');
+  };
+
+  const validReplies = replies.filter(r => r.trim()).slice(0, 3);
+  const validButtons = buttons.filter(b => b.title?.trim() && b.url?.trim()).slice(0, 3);
+  const canSave = selectedAccount && keywords.length > 0 && validReplies.length > 0 && (isDmReply || (selectedPost && dmText.trim()));
+
+  const save = async () => {
+    if (!automation || !canSave) {
+      toast.error('Fill in the required fields first');
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        instagramAccountId: selectedAccount,
+        name: name.trim() || keywords[0],
+        keywords,
+        matchType,
+        replyMessages: validReplies,
+      };
+      if (isDmReply) {
+        payload.replyButtons = validButtons;
+      } else {
+        payload.postId = selectedPost.id;
+        payload.postPermalink = selectedPost.permalink || null;
+        payload.postThumbnail = selectedPost.thumbnail_url || selectedPost.media_url || null;
+        payload.dmText = dmText.trim();
+        payload.dmButtons = validButtons;
+        payload.askToFollow = askToFollow;
+        payload.followMessage = askToFollow ? followMessage.trim() : null;
+        payload.followButtonText = askToFollow ? (followButtonText.trim() || 'I Followed') : null;
+      }
+
+      const res = await fetch(`/api/automations/${automation._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update automation');
+      toast.success('Automation updated');
+      onSaved(data.automation);
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onOpenChange(false); }}>
+      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0">
+        <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
+          <DialogTitle className="flex items-center gap-2 text-2xl">
+            <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${isDmReply ? 'bg-cyan-600' : 'bg-violet-600'}`}>
+              {isDmReply ? <Inbox className="w-5 h-5 text-white" /> : <MessageCircle className="w-5 h-5 text-white" />}
+            </div>
+            Edit Automation
+          </DialogTitle>
+          <DialogDescription>{isDmReply ? 'Update the DM keyword reply settings.' : 'Update the comment automation settings.'}</DialogDescription>
+        </DialogHeader>
+
+        <div className="px-6 py-4 space-y-7">
+          <div className="space-y-3">
+            <SectionHeader icon={Instagram} step="1" title="Instagram Account" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 ml-11">
+              {accounts.map((a) => (
+                <button key={a.id} onClick={() => { setSelectedAccount(a.id); if (!isDmReply) setSelectedPost(null); }}
+                  className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-violet-500 bg-violet-50 shadow-sm' : 'border-border hover:border-violet-300'}`}>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-fuchsia-500 to-violet-500 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
+                    <span className="font-medium">@{a.username}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {!isDmReply && selectedAccount && (
+            <div className="space-y-3">
+              <SectionHeader icon={Hash} step="2" title="Post" subtitle="Choose the post this automation watches." />
+              <div className="ml-11">
+                {loadingMedia ? <p className="text-sm text-muted-foreground">Loading posts...</p>
+                : media.length === 0 ? <p className="text-sm text-muted-foreground">No posts found.</p>
+                : (
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-h-64 overflow-y-auto p-1">
+                    {media.map((m) => (
+                      <button key={m.id} onClick={() => setSelectedPost(m)}
+                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-violet-500 ring-2 ring-violet-300' : 'border-transparent hover:border-violet-300'}`}>
+                        <img src={m.thumbnail_url || m.media_url} alt="" className="w-full h-full object-cover" />
+                        {selectedPost?.id === m.id && <div className="absolute inset-0 bg-violet-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <SectionHeader icon={Sparkles} step={isDmReply ? '2' : '3'} title={isDmReply ? 'When user sends DM' : 'When user comments'} subtitle="Add the keywords that should trigger this automation." />
+            <div className="ml-11 space-y-3">
+              <div className="flex items-center gap-2">
+                <Input value={kwInput} onChange={(e) => setKwInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addKeyword(); } }}
+                  placeholder='e.g. "price"' className="flex-1" />
+                <Button type="button" onClick={addKeyword} variant="secondary">Add</Button>
+              </div>
+              {keywords.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {keywords.map((k) => (
+                    <Badge key={k} className="bg-violet-100 text-violet-700 hover:bg-violet-200 pl-3 pr-1 py-1 text-sm">
+                      {k}
+                      <button onClick={() => setKeywords(keywords.filter(x => x !== k))} className="ml-1 hover:bg-violet-300 rounded-full p-0.5"><X className="w-3 h-3" /></button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-3">
+                <Label className="text-sm">Keyword match:</Label>
+                <Select value={matchType} onValueChange={setMatchType}>
+                  <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="contains">Contains keyword</SelectItem>
+                    <SelectItem value="exact">Exact match</SelectItem>
+                    <SelectItem value="starts_with">Starts with keyword</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <SectionHeader icon={Shuffle} step={isDmReply ? '3' : '4'} title={isDmReply ? 'DM Reply' : 'Public Reply'} subtitle="Add up to 3 reply variants." />
+            <div className="ml-11 space-y-2">
+              {replies.map((r, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span className="text-xs font-mono text-muted-foreground pt-3">#{i + 1}</span>
+                  <Textarea value={r} onChange={(e) => { const n = [...replies]; n[i] = e.target.value; setReplies(n); }}
+                    placeholder={i === 0 ? 'Write a reply...' : 'Optional variant'} rows={2} className="flex-1 resize-none" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {!isDmReply && (
+            <>
+              <div className="space-y-3">
+                <SectionHeader icon={UserPlus} step="5" title="Ask To Follow First" />
+                <div className="ml-11 rounded-xl border bg-slate-50 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-sm">Require user to follow first</p>
+                      <p className="text-xs text-muted-foreground">Send the main DM after follow verification.</p>
+                    </div>
+                    <Switch checked={askToFollow} onCheckedChange={setAskToFollow} />
+                  </div>
+                  {askToFollow && (
+                    <div className="space-y-3">
+                      <Textarea value={followMessage} onChange={(e) => setFollowMessage(e.target.value)} placeholder="Follow us first to unlock the link." rows={2} />
+                      <Input value={followButtonText} onChange={(e) => setFollowButtonText(e.target.value)} placeholder="I Followed" maxLength={20} />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <SectionHeader icon={Send} step="6" title="Direct Message" />
+                <div className="ml-11 space-y-3">
+                  <Textarea value={dmText} onChange={(e) => setDmText(e.target.value)} placeholder="Write the DM..." rows={3} />
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="space-y-3">
+            <SectionHeader icon={LinkIcon} step={isDmReply ? '4' : '7'} title="Link Buttons" subtitle="Optional, up to 3 links." />
+            <div className="ml-11 space-y-2">
+              {buttons.map((b, i) => (
+                <div key={i} className="flex items-center gap-2 rounded-lg border p-2 bg-white">
+                  <Input value={b.title || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], title: e.target.value }; setButtons(n); }} placeholder="Button text" className="flex-1" />
+                  <Input value={b.url || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], url: e.target.value }; setButtons(n); }} placeholder="https://..." className="flex-[1.5]" />
+                  <Button type="button" size="icon" variant="ghost" onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))}><X className="w-4 h-4 text-rose-500" /></Button>
+                </div>
+              ))}
+              {buttons.length < 3 && (
+                <Button type="button" size="sm" variant="ghost" onClick={() => setButtons([...buttons, { title: '', url: '' }])} className="text-violet-600">
+                  <Plus className="w-3 h-3 mr-1" /> Add link
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <SectionHeader icon={Zap} step={isDmReply ? '5' : '8'} title="Name" />
+            <div className="ml-11"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={keywords[0] || 'Automation name'} /></div>
+          </div>
+        </div>
+
+        <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={save} disabled={saving || !canSave} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
+            {saving ? 'Saving...' : 'Save changes'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AutomationCard({ a, accounts, onToggle, onDelete, onEdit }) {
   const acct = accounts.find(x => x.id === a.instagramAccountId);
-  const keywords = a.keywords?.length ? a.keywords : (a.triggerWord ? [a.triggerWord] : []);
-  const replies = a.replyMessages?.length ? a.replyMessages : (a.replyMessage ? [a.replyMessage] : []);
+  const keywords = keywordList(a);
   const isDmReply = a.type === 'dm_reply';
-  const dmText = a.dmText || a.dmMessage || '';
-  const dmButtons = a.dmButtons || [];
-  const replyButtons = a.replyButtons || [];
   const accentBorder = isDmReply ? 'border-l-cyan-500' : 'border-l-violet-500';
   const TypeIcon = isDmReply ? Inbox : MessageCircle;
   const typeBadge = isDmReply
-    ? <Badge className="bg-cyan-100 text-cyan-700 text-[10px]">DM Auto-Reply</Badge>
-    : <Badge className="bg-violet-100 text-violet-700 text-[10px]">Comment → DM</Badge>;
+    ? <Badge className="bg-cyan-100 text-cyan-700 text-xs">DM Auto-Reply</Badge>
+    : <Badge className="bg-violet-100 text-violet-700 text-xs">Comment to DM</Badge>;
 
   return (
-    <Card className={`hover:shadow-lg transition-shadow border-l-4 ${accentBorder}`}>
+    <Card className={`hover:shadow-md transition-shadow border-l-4 ${accentBorder} bg-white`}>
       <CardContent className="p-5">
         <div className="flex items-start gap-4">
           {!isDmReply && a.postThumbnail ? (
@@ -492,14 +818,14 @@ function AutomationCard({ a, accounts, onToggle, onDelete }) {
             <div className="flex items-start justify-between gap-2 mb-3">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-semibold text-base">{a.name || keywords[0] || 'Automation'}</h3>
+                  <h3 className="font-semibold text-lg leading-tight">{a.name || keywords[0] || 'Automation'}</h3>
                   {typeBadge}
                   {acct && <Badge variant="outline" className="text-xs">@{acct.username}</Badge>}
                   {a.postPermalink && <a href={a.postPermalink} target="_blank" rel="noreferrer" className="text-xs text-violet-600 hover:underline inline-flex items-center gap-1">View Post <ExternalLink className="w-3 h-3" /></a>}
                 </div>
-                <div className="flex items-center gap-1 mt-2 flex-wrap">
-                  <span className="text-xs text-muted-foreground">Triggers ({a.matchType || 'contains'}):</span>
-                  {keywords.slice(0, 5).map(k => <Badge key={k} className="bg-violet-100 text-violet-700 text-xs">{k}</Badge>)}
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                  <span className="text-sm font-medium text-slate-700">{triggerLabel(a)} {matchLabel(a.matchType)}</span>
+                  {keywords.slice(0, 5).map(k => <Badge key={k} className="bg-violet-100 text-violet-700 text-sm">{k}</Badge>)}
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -507,38 +833,16 @@ function AutomationCard({ a, accounts, onToggle, onDelete }) {
                 <Switch checked={a.isActive} onCheckedChange={() => onToggle(a)} />
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm bg-slate-50 rounded-xl p-3">
-              <div className="flex items-start gap-2">
-                <Shuffle className="w-4 h-4 text-violet-500 mt-0.5 flex-shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">{isDmReply ? 'Reply variants' : 'Public reply variants'} ({replies.length})</p>
-                  <p className="truncate text-xs">{replies[0]}{replies.length > 1 && ` +${replies.length - 1} more`}</p>
-                </div>
+            <div className="flex items-center justify-between mt-5 border-t pt-3">
+              <span className="text-sm font-medium text-slate-600">{runLabel(a.runsCount || 0)}</span>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => onEdit(a)} className="text-slate-700 hover:bg-slate-100">
+                  <Pencil className="w-4 h-4 mr-1" /> Edit
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => onDelete(a._id)} className="text-rose-500 hover:text-rose-600 hover:bg-rose-50">
+                  <Trash2 className="w-4 h-4 mr-1" /> Delete
+                </Button>
               </div>
-              <div className="flex items-start gap-2">
-                <Send className="w-4 h-4 text-indigo-500 mt-0.5 flex-shrink-0" />
-                <div className="min-w-0">
-                  {isDmReply ? (
-                    <>
-                      <p className="text-xs text-muted-foreground">Reply links {replyButtons.length > 0 && `• ${replyButtons.length} link${replyButtons.length > 1 ? 's' : ''}`}</p>
-                      <p className="truncate text-xs">{replyButtons.length > 0 ? replyButtons.map(b => b.title).join(' · ') : 'Plain text reply'}</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-xs text-muted-foreground">
-                        DM {dmButtons.length > 0 && `• ${dmButtons.length} link${dmButtons.length > 1 ? 's' : ''}`}
-                        {a.askToFollow && ' • follow-gated'}
-                      </p>
-                      <p className="truncate text-xs">{dmText}</p>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center justify-end mt-3">
-              <Button variant="ghost" size="sm" onClick={() => onDelete(a._id)} className="text-rose-500 hover:text-rose-600 hover:bg-rose-50">
-                <Trash2 className="w-4 h-4 mr-1" /> Delete
-              </Button>
             </div>
           </div>
         </div>
@@ -553,8 +857,10 @@ export default function DashboardPage() {
   const [user, setUser] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [automations, setAutomations] = useState([]);
+  const [showTypeChooser, setShowTypeChooser] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateDmReply, setShowCreateDmReply] = useState(false);
+  const [editingAutomation, setEditingAutomation] = useState(null);
   const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
@@ -616,20 +922,6 @@ export default function DashboardPage() {
     if (!confirm('Disconnect this Instagram account? All linked automations will be removed.')) return;
     const res = await fetch(`/api/instagram/accounts/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
     if (res.ok) { toast.success('Disconnected'); refresh(); }
-  };
-  const resubscribe = async (id) => {
-    toast.loading('Re-subscribing to webhooks...', { id: 'sub' });
-    const res = await fetch(`/api/instagram/accounts/${id}/resubscribe`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    if (res.ok) toast.success('Webhook subscription active!', { id: 'sub' });
-    else toast.error(`Failed: ${data.error || 'unknown'}`, { id: 'sub' });
-  };
-  const checkSub = async (id) => {
-    const res = await fetch(`/api/instagram/accounts/${id}/subscription`, { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    const subscribed = Array.isArray(data.data?.data) && data.data.data.length > 0;
-    if (subscribed) toast.success(`Subscribed: ${data.data.data[0].subscribed_fields?.join(', ') || 'none'}`);
-    else toast.warning('Not subscribed yet. Click the refresh icon to subscribe.');
   };
 
   if (!token || !user) return null;
@@ -698,8 +990,6 @@ export default function DashboardPage() {
                       <div><p className="font-semibold">@{a.username}</p><p className="text-xs text-muted-foreground">{a.accountType || 'Business'}</p></div>
                     </div>
                     <div className="flex items-center gap-1">
-                      {/* <Button variant="ghost" size="icon" title="Check webhook subscription" onClick={() => checkSub(a.id)}><Activity className="w-4 h-4 text-emerald-600" /></Button>
-                      <Button variant="ghost" size="icon" title="Re-subscribe to webhooks" onClick={() => resubscribe(a.id)}><RefreshCw className="w-4 h-4 text-blue-600" /></Button> */}
                       <Button variant="ghost" size="icon" title="Disconnect" onClick={() => disconnectAccount(a.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
                     </div>
                   </CardContent>
@@ -712,6 +1002,11 @@ export default function DashboardPage() {
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold flex items-center gap-2"><Zap className="w-5 h-5 text-amber-500" /> Automations</h2>
+            {accounts.length > 0 && (
+              <Button onClick={() => setShowTypeChooser(true)} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
+                <Plus className="w-4 h-4 mr-2" /> New Automation
+              </Button>
+            )}
           </div>
 
           {accounts.length === 0 ? (
@@ -723,53 +1018,16 @@ export default function DashboardPage() {
             </Card>
           ) : (
             <>
-              {/* Automation type chooser cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <button onClick={() => setShowCreate(true)} className="text-left">
-                  <Card className="hover:shadow-xl transition-all border-2 hover:border-violet-300 h-full">
-                    <CardContent className="p-6 flex items-start gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center flex-shrink-0 shadow-lg shadow-violet-500/30">
-                        <MessageCircle className="w-6 h-6 text-white" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between mb-1">
-                          <h3 className="font-bold">Comment → DM Automation</h3>
-                          <Plus className="w-4 h-4 text-muted-foreground" />
-                        </div>
-                        <p className="text-sm text-muted-foreground">When someone comments a keyword on your post, reply publicly + send a personalized DM with link buttons.</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </button>
-
-                <button onClick={() => setShowCreateDmReply(true)} className="text-left">
-                  <Card className="hover:shadow-xl transition-all border-2 hover:border-cyan-300 h-full">
-                    <CardContent className="p-6 flex items-start gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center flex-shrink-0 shadow-lg shadow-blue-500/30">
-                        <Inbox className="w-6 h-6 text-white" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between mb-1">
-                          <h3 className="font-bold">DM Auto-Reply</h3>
-                          <Plus className="w-4 h-4 text-muted-foreground" />
-                        </div>
-                        <p className="text-sm text-muted-foreground">When someone DMs you a specific keyword, automatically reply with a message + optional link buttons.</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </button>
-              </div>
-
               {automations.length === 0 ? (
                 <Card className="border-dashed">
                   <CardContent className="py-12 text-center">
                     <Sparkles className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-                    <p className="text-muted-foreground">No automations yet. Pick a type above to create your first one.</p>
+                    <p className="text-muted-foreground">No automations yet. Click New Automation to create your first one.</p>
                   </CardContent>
                 </Card>
               ) : (
                 <div className="space-y-3">
-                  {automations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} />)}
+                  {automations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} />)}
                 </div>
               )}
             </>
@@ -777,8 +1035,18 @@ export default function DashboardPage() {
         </section>
       </main>
 
+      <AutomationTypeDialog
+        open={showTypeChooser}
+        onOpenChange={setShowTypeChooser}
+        onSelect={(type) => {
+          setShowTypeChooser(false);
+          if (type === 'dm_reply') setShowCreateDmReply(true);
+          else setShowCreate(true);
+        }}
+      />
       <CreateAutomationDialog open={showCreate} onOpenChange={setShowCreate} accounts={accounts} token={token} onCreated={() => refresh()} />
       <CreateDmReplyDialog open={showCreateDmReply} onOpenChange={setShowCreateDmReply} accounts={accounts} token={token} onCreated={() => refresh()} />
+      <EditAutomationDialog automation={editingAutomation} onOpenChange={() => setEditingAutomation(null)} accounts={accounts} token={token} onSaved={() => refresh()} />
     </div>
   );
 }

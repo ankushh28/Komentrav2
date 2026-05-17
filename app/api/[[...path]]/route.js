@@ -389,42 +389,81 @@ function stripQuotes(str) {
 }
 
 // ----------- AUTOMATIONS -----------
+function cleanStringList(values, limit = 3) {
+  return Array.isArray(values)
+    ? values.map(s => String(s).trim()).filter(Boolean).slice(0, limit)
+    : [];
+}
+
+function cleanKeywordList(values) {
+  return Array.isArray(values)
+    ? values.map(k => stripQuotes(String(k)).toLowerCase().trim()).filter(Boolean)
+    : [];
+}
+
+function cleanButtonList(values) {
+  return Array.isArray(values)
+    ? values
+      .map(b => ({ title: String(b?.title || '').trim(), url: String(b?.url || '').trim() }))
+      .filter(b => b.title && b.url)
+      .slice(0, 3)
+    : [];
+}
+
+function normalizeMatchType(matchType) {
+  return ['exact', 'contains', 'starts_with'].includes(matchType) ? matchType : 'contains';
+}
+
+async function findOwnedInstagramAccount(db, userId, instagramAccountId) {
+  if (!instagramAccountId) return null;
+  return db.collection('instagram_accounts').findOne({
+    _id: instagramAccountId,
+    connectedUserId: userId,
+  });
+}
+
+async function addRunCounts(db, userId, automations) {
+  if (automations.length === 0) return automations;
+  const ids = automations.map(a => a._id);
+  const counts = await db.collection('automation_runs').aggregate([
+    { $match: { userId, automationId: { $in: ids } } },
+    { $group: { _id: '$automationId', count: { $sum: 1 } } },
+  ]).toArray();
+  const countById = new Map(counts.map(row => [row._id, row.count]));
+  return automations.map(a => ({ ...a, runsCount: countById.get(a._id) || 0 }));
+}
+
 async function handleCreateAutomation(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const body = await req.json();
   const type = body.type === 'dm_reply' ? 'dm_reply' : 'comment_dm';
   const db = await getDb();
+  const account = await findOwnedInstagramAccount(db, u.userId, body.instagramAccountId);
+
+  if (!account) {
+    return json({ error: 'Please refresh your connected Instagram accounts and try again.' }, 403);
+  }
 
   if (type === 'dm_reply') {
-    const { instagramAccountId, keywords, matchType, replyMessages, replyButtons, name, igUsername } = body;
-    const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => stripQuotes(String(k)).toLowerCase().trim()).filter(Boolean) : [];
-    const cleanReplies = Array.isArray(replyMessages) ? replyMessages.map(s => String(s).trim()).filter(Boolean).slice(0, 3) : [];
-    const cleanButtons = Array.isArray(replyButtons) ? replyButtons.filter(b => b && b.title && b.url).slice(0, 3) : [];
+    const { instagramAccountId, keywords, matchType, replyMessages, replyButtons, name } = body;
+    const cleanKeywords = cleanKeywordList(keywords);
+    const cleanReplies = cleanStringList(replyMessages);
+    const cleanButtons = cleanButtonList(replyButtons);
     if (!instagramAccountId || cleanKeywords.length === 0 || cleanReplies.length === 0) {
       return json({ error: 'Need an account, at least 1 keyword, and 1 reply variant.' }, 400);
     }
-    const account = await db.collection('instagram_accounts').findOne({
-      _id: instagramAccountId,
-      connectedUserId: u.userId
-    });
-
-    if (!account) {
-      return json({
-        error: 'Please refresh your connected Instagram accounts and try again.'
-      }, 403);
-  }
     const doc = {
       _id: uuidv4(),
       userId: u.userId,
       instagramAccountId,
       type: 'dm_reply',
-      name: name || cleanKeywords[0],
+      name: String(name || '').trim() || cleanKeywords[0],
       keywords: cleanKeywords,
-      matchType: ['exact', 'contains', 'starts_with'].includes(matchType) ? matchType : 'contains',
+      matchType: normalizeMatchType(matchType),
       replyMessages: cleanReplies,
       replyButtons: cleanButtons,
-      igUsername: u.username || null,
+      igUsername: account.username || null,
       isActive: true,
       createdAt: new Date(),
     };
@@ -435,47 +474,39 @@ async function handleCreateAutomation(req) {
   const {
     instagramAccountId, postId, postPermalink, postThumbnail,
     keywords, matchType, replyMessages, dmText, dmButtons,
-    askToFollow, followMessage, followButtonText, igUsername, name,
+    askToFollow, followMessage, followButtonText, name,
   } = body;
-  const cleanKeywords = Array.isArray(keywords) ? keywords.map(k => stripQuotes(String(k)).toLowerCase().trim()).filter(Boolean) : [];
-  const cleanReplies = Array.isArray(replyMessages) ? replyMessages.map(s => String(s).trim()).filter(Boolean).slice(0, 3) : [];
-  const cleanButtons = Array.isArray(dmButtons) ? dmButtons.filter(b => b && b.title && b.url).slice(0, 3) : [];
-  if (!instagramAccountId || !postId || cleanKeywords.length === 0 || cleanReplies.length === 0 || !dmText) {
+  const cleanKeywords = cleanKeywordList(keywords);
+  const cleanReplies = cleanStringList(replyMessages);
+  const cleanButtons = cleanButtonList(dmButtons);
+  const cleanDmText = String(dmText || '').trim();
+  const cleanPostId = String(postId || '').trim();
+  if (!instagramAccountId || !cleanPostId || cleanKeywords.length === 0 || cleanReplies.length === 0 || !cleanDmText) {
     return json({ error: 'Missing fields. Need at least 1 keyword, 1 reply variant and a DM message.' }, 400);
-  }
-  const account = await db.collection('instagram_accounts').findOne({
-      _id: instagramAccountId,
-      connectedUserId: u.userId
-    });
-
-    if (!account) {
-      return json({
-        error: 'Please refresh your connected Instagram accounts and try again.'
-      }, 403);
   }
   const doc = {
     _id: uuidv4(),
     userId: u.userId,
     instagramAccountId,
     type: 'comment_dm',
-    postId,
+    postId: cleanPostId,
     postPermalink: postPermalink || null,
     postThumbnail: postThumbnail || null,
-    name: name || cleanKeywords[0],
+    name: String(name || '').trim() || cleanKeywords[0],
     keywords: cleanKeywords,
-    matchType: ['exact', 'contains', 'starts_with'].includes(matchType) ? matchType : 'contains',
+    matchType: normalizeMatchType(matchType),
     replyMessages: cleanReplies,
-    dmText: String(dmText),
+    dmText: cleanDmText,
     dmButtons: cleanButtons,
     askToFollow: !!askToFollow,
-    followMessage: askToFollow ? (followMessage || `Follow @${u.username || ''} first to unlock this!`) : null,
-    followButtonText: askToFollow ? (followButtonText || 'I Followed ✅') : null,
-    igUsername: u.username || null,
+    followMessage: askToFollow ? (String(followMessage || '').trim() || `Follow @${account.username || ''} first to unlock this!`) : null,
+    followButtonText: askToFollow ? (String(followButtonText || '').trim() || 'I Followed') : null,
+    igUsername: account.username || null,
     isActive: true,
     createdAt: new Date(),
     triggerWord: cleanKeywords[0],
     replyMessage: cleanReplies[0],
-    dmMessage: String(dmText),
+    dmMessage: cleanDmText,
   };
   await db.collection('automations').insertOne(doc);
   return json({ automation: doc });
@@ -486,22 +517,96 @@ async function handleListAutomations(req) {
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
   const list = await db.collection('automations').find({ userId: u.userId }).sort({ createdAt: -1 }).toArray();
-  return json({ automations: list });
+  return json({ automations: await addRunCounts(db, u.userId, list) });
 }
 
 async function handleUpdateAutomation(req, id) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const body = await req.json();
+  const db = await getDb();
+  const existing = await db.collection('automations').findOne({ _id: id, userId: u.userId });
+  if (!existing) return json({ error: 'Automation not found' }, 404);
+
   const update = {};
   if (typeof body.isActive === 'boolean') update.isActive = body.isActive;
-  if (body.triggerWord) update.triggerWord = body.triggerWord.toLowerCase().trim();
-  if (body.replyMessage) update.replyMessage = body.replyMessage;
-  if (body.dmMessage) update.dmMessage = body.dmMessage;
-  const db = await getDb();
+
+  const settingKeys = [
+    'instagramAccountId', 'name', 'keywords', 'matchType', 'replyMessages',
+    'replyButtons', 'postId', 'postPermalink', 'postThumbnail', 'dmText',
+    'dmButtons', 'askToFollow', 'followMessage', 'followButtonText',
+  ];
+  const hasSettingsUpdate = settingKeys.some(key => Object.prototype.hasOwnProperty.call(body, key));
+
+  if (hasSettingsUpdate) {
+    const instagramAccountId = body.instagramAccountId || existing.instagramAccountId;
+    const account = await findOwnedInstagramAccount(db, u.userId, instagramAccountId);
+    if (!account) {
+      return json({ error: 'Please refresh your connected Instagram accounts and try again.' }, 403);
+    }
+
+    const keywords = Object.prototype.hasOwnProperty.call(body, 'keywords')
+      ? cleanKeywordList(body.keywords)
+      : cleanKeywordList(existing.keywords || (existing.triggerWord ? [existing.triggerWord] : []));
+    const replies = Object.prototype.hasOwnProperty.call(body, 'replyMessages')
+      ? cleanStringList(body.replyMessages)
+      : cleanStringList(existing.replyMessages || (existing.replyMessage ? [existing.replyMessage] : []));
+
+    if (keywords.length === 0 || replies.length === 0) {
+      return json({ error: 'Add at least 1 keyword and 1 reply variant.' }, 400);
+    }
+
+    update.instagramAccountId = instagramAccountId;
+    update.name = Object.prototype.hasOwnProperty.call(body, 'name')
+      ? (String(body.name || '').trim() || keywords[0])
+      : (existing.name || keywords[0]);
+    update.keywords = keywords;
+    update.matchType = normalizeMatchType(body.matchType || existing.matchType);
+    update.replyMessages = replies;
+    update.igUsername = account.username || null;
+
+    if (existing.type === 'dm_reply') {
+      update.replyButtons = Object.prototype.hasOwnProperty.call(body, 'replyButtons')
+        ? cleanButtonList(body.replyButtons)
+        : cleanButtonList(existing.replyButtons || []);
+    } else {
+      const dmText = Object.prototype.hasOwnProperty.call(body, 'dmText')
+        ? String(body.dmText || '').trim()
+        : String(existing.dmText || existing.dmMessage || '').trim();
+      const postId = Object.prototype.hasOwnProperty.call(body, 'postId')
+        ? String(body.postId || '').trim()
+        : String(existing.postId || '').trim();
+      if (!postId || !dmText) {
+        return json({ error: 'Choose a post and add a DM message.' }, 400);
+      }
+
+      const askToFollow = Object.prototype.hasOwnProperty.call(body, 'askToFollow')
+        ? !!body.askToFollow
+        : !!existing.askToFollow;
+
+      update.postId = postId;
+      update.postPermalink = Object.prototype.hasOwnProperty.call(body, 'postPermalink') ? (body.postPermalink || null) : (existing.postPermalink || null);
+      update.postThumbnail = Object.prototype.hasOwnProperty.call(body, 'postThumbnail') ? (body.postThumbnail || null) : (existing.postThumbnail || null);
+      update.dmText = dmText;
+      update.dmButtons = Object.prototype.hasOwnProperty.call(body, 'dmButtons') ? cleanButtonList(body.dmButtons) : cleanButtonList(existing.dmButtons || []);
+      update.askToFollow = askToFollow;
+      update.followMessage = askToFollow
+        ? (String(Object.prototype.hasOwnProperty.call(body, 'followMessage') ? body.followMessage : existing.followMessage || '').trim() || `Follow @${account.username || ''} first to unlock this!`)
+        : null;
+      update.followButtonText = askToFollow
+        ? (String(Object.prototype.hasOwnProperty.call(body, 'followButtonText') ? body.followButtonText : existing.followButtonText || '').trim() || 'I Followed')
+        : null;
+      update.triggerWord = keywords[0];
+      update.replyMessage = replies[0];
+      update.dmMessage = dmText;
+    }
+  }
+
+  update.updatedAt = new Date();
   await db.collection('automations').updateOne({ _id: id, userId: u.userId }, { $set: update });
   const doc = await db.collection('automations').findOne({ _id: id, userId: u.userId });
-  return json({ automation: doc });
+  const [withCounts] = await addRunCounts(db, u.userId, [doc]);
+  return json({ automation: withCounts });
 }
 
 async function handleDeleteAutomation(req, id) {
