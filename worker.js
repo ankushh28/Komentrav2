@@ -177,6 +177,27 @@ function normalizedEventText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function normalizedInstagramUsername(username) {
+  return String(username || '').trim().replace(/^@/, '').toLowerCase();
+}
+
+function isOwnAccountComment({ acct, entryId, fromId, fromUsername }) {
+  const accountIds = [
+    entryId,
+    acct?.instagramUserId,
+    acct?.instagramBusinessAccountId,
+    acct?.instagramAppScopedUserId,
+    acct?.instagramTokenUserId,
+    ...(Array.isArray(acct?.instagramWebhookIds) ? acct.instagramWebhookIds : []),
+  ].filter(Boolean).map(String);
+
+  if (fromId && new Set(accountIds).has(String(fromId))) return true;
+
+  const accountUsername = normalizedInstagramUsername(acct?.username);
+  const commentUsername = normalizedInstagramUsername(fromUsername);
+  return !!accountUsername && !!commentUsername && accountUsername === commentUsername;
+}
+
 function dmSourceEventId(msg, senderId, recipientId, text) {
   if (msg.message?.mid) return String(msg.message.mid);
   return `fallback:${hashEventParts([
@@ -451,6 +472,17 @@ async function processJob(job) {
         continue;
       }
       await rememberWebhookIds(dbi, acct._id, [igUserId]);
+
+      if (isOwnAccountComment({ acct, entryId: igUserId, fromId, fromUsername })) {
+        logAutomation('comment-dm', 'skipped own account comment', {
+          jobId: job.id,
+          commentId,
+          fromId: fromId || null,
+          fromUsername,
+          instagramAccountId: acct._id,
+        });
+        continue;
+      }
 
       if (!(await isWorkspaceActive(dbi, acct.workspaceId))) {
         logAutomation('comment-dm', 'skipped disabled workspace', {
