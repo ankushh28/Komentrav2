@@ -16,7 +16,7 @@ import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, Bot, ChevronRight, BarChart3, MessageCircle, Inbox,
-  Pencil, Settings, Briefcase,
+  Pencil, Settings, Briefcase, Users,
 } from 'lucide-react';
 
 function Logo() {
