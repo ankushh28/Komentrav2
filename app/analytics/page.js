@@ -5,9 +5,10 @@ import { useRouter } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Activity, Bot, ArrowLeft, BarChart3, Zap, MessageSquare, Send, ShieldCheck,
-  TrendingUp, UserCheck, Hash, Clock,
+  TrendingUp, UserCheck, Hash, Clock, Briefcase,
 } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -43,14 +44,25 @@ function FlowBadge({ flow }) {
 export default function AnalyticsPage() {
   const router = useRouter();
   const [data, setData] = useState(null);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) { router.push('/'); return; }
-    fetch('/api/analytics', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(d => setData(d))
+    Promise.all([
+      fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+      fetch('/api/analytics', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+    ])
+      .then(([workspaceData, analyticsData]) => {
+        const list = workspaceData.workspaces || [];
+        setWorkspaces(list);
+        const stored = localStorage.getItem('selectedWorkspaceId');
+        const nextId = (stored && list.some(w => w.id === stored) && stored) || list.find(w => w.status === 'active')?.id || list[0]?.id || '';
+        setSelectedWorkspaceId(nextId);
+        setData(analyticsData);
+      })
       .finally(() => setLoading(false));
   }, [router]);
 
@@ -59,7 +71,11 @@ export default function AnalyticsPage() {
   }
   if (!data) return null;
 
-  const { summary, timeline, perAutomation, topKeywords, funnel, recentMatches } = data;
+  const { summary, timeline, perAutomation, workspaceBreakdown = [], topKeywords, funnel, recentMatches } = data;
+  const selectWorkspace = (id) => {
+    setSelectedWorkspaceId(id);
+    localStorage.setItem('selectedWorkspaceId', id);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/40">
@@ -74,17 +90,72 @@ export default function AnalyticsPage() {
               <h1 className="text-xl font-bold">Analytics</h1>
             </div>
           </div>
+          <div className="hidden sm:flex items-center gap-2">
+            <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
+              <SelectTrigger className="w-52 bg-white">
+                <SelectValue placeholder="Workspace" />
+              </SelectTrigger>
+              <SelectContent>
+                {workspaces.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.name}{w.status === 'disabled' ? ' (disabled)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={() => router.push('/dashboard')}>
+              Open workspace
+            </Button>
+          </div>
         </div>
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-6xl space-y-8">
+        <div className="sm:hidden flex items-center gap-2">
+          <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
+            <SelectTrigger className="flex-1 bg-white">
+              <SelectValue placeholder="Workspace" />
+            </SelectTrigger>
+            <SelectContent>
+              {workspaces.map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}{w.status === 'disabled' ? ' (disabled)' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         {/* Top stat tiles */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatTile label="Connected Accounts" value={summary.totals.accounts} gradient="bg-gradient-to-br from-indigo-500 to-violet-600" icon={Bot} />
+          <StatTile label="Workspaces" value={summary.totals.workspaces || workspaces.length} sublabel={`${summary.totals.activeWorkspaces || 0} active`} gradient="bg-gradient-to-br from-indigo-500 to-violet-600" icon={Briefcase} />
           <StatTile label="Active Automations" value={summary.totals.activeAutomations} sublabel={`of ${summary.totals.automations} total`} gradient="bg-gradient-to-br from-violet-500 to-fuchsia-500" icon={Zap} />
           <StatTile label="Triggers Fired" value={summary.totals.totalTriggers} sublabel={`${summary.runsLast7Days} this week`} gradient="bg-gradient-to-br from-emerald-500 to-teal-500" icon={TrendingUp} />
           <StatTile label="DMs Sent" value={summary.totals.totalDMs} sublabel={summary.totals.followConvRate !== null ? `${summary.totals.followConvRate}% follow conv.` : ''} gradient="bg-gradient-to-br from-rose-500 to-orange-500" icon={Send} />
         </div>
+
+        <Card>
+          <CardContent className="p-6">
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Briefcase className="w-4 h-4 text-violet-600" /> Workspace Breakdown</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {workspaceBreakdown.map(w => (
+                <div key={w.id} className="rounded-lg border bg-slate-50 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="font-semibold">{w.name}</p>
+                      <p className="text-xs text-muted-foreground">{w.accounts} account · {w.automations} automations</p>
+                    </div>
+                    <Badge className={w.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}>{w.status}</Badge>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div><p className="text-xs text-muted-foreground">Active</p><p className="font-semibold">{w.activeAutomations}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Triggers</p><p className="font-semibold">{w.triggers}</p></div>
+                    <div><p className="text-xs text-muted-foreground">DMs</p><p className="font-semibold">{w.dms}</p></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Timeline chart */}
         <Card>
@@ -176,6 +247,7 @@ export default function AnalyticsPage() {
                 <table className="w-full text-sm">
                   <thead className="text-xs text-muted-foreground border-b">
                     <tr>
+                      <th className="text-left py-2">Workspace</th>
                       <th className="text-left py-2">Automation</th>
                       <th className="text-left">Keywords</th>
                       <th className="text-right">Triggers</th>
@@ -188,6 +260,9 @@ export default function AnalyticsPage() {
                   <tbody>
                     {perAutomation.map(a => (
                       <tr key={a.id} className="border-b hover:bg-slate-50">
+                        <td className="py-3">
+                          <Badge variant="outline" className="text-[10px]">{a.workspaceName || 'Workspace'}</Badge>
+                        </td>
                         <td className="py-3 flex items-center gap-2">
                           {a.thumb && <img src={a.thumb} alt="" className="w-9 h-9 rounded-md object-cover" />}
                           <span className="font-medium truncate max-w-[160px]">{a.name}</span>
@@ -229,6 +304,7 @@ export default function AnalyticsPage() {
                   <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-50">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
+                        <Badge variant="outline" className="text-[10px]">{r.workspaceName || 'Workspace'}</Badge>
                         <span className="text-xs text-muted-foreground">{r.automationName}</span>
                         <FlowBadge flow={r.flow} />
                         {r.replyOk && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Reply ✓</Badge>}

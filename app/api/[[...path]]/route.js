@@ -21,6 +21,240 @@ function getPath(params) {
   return '/' + (params?.path?.join('/') || '');
 }
 
+let workspaceIndexesPromise;
+
+function cleanWorkspaceName(name) {
+  return String(name || '').trim().slice(0, 80) || 'Default Workspace';
+}
+
+function publicWorkspace(workspace, extra = {}) {
+  return {
+    id: workspace._id,
+    name: workspace.name,
+    status: workspace.status || 'active',
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+    disabledAt: workspace.disabledAt || null,
+    ...extra,
+  };
+}
+
+function workspaceHeader(req) {
+  return req.headers.get('x-workspace-id') || req.headers.get('X-Workspace-Id');
+}
+
+async function ensureWorkspaceIndexes(db) {
+  if (!workspaceIndexesPromise) {
+    workspaceIndexesPromise = Promise.all([
+      db.collection('workspaces').createIndex({ ownerUserId: 1, status: 1 }),
+      db.collection('instagram_accounts').createIndex(
+        { workspaceId: 1 },
+        { unique: true, sparse: true }
+      ),
+      db.collection('instagram_accounts').createIndex({ connectedUserId: 1, workspaceId: 1 }),
+      db.collection('automations').createIndex({ userId: 1, workspaceId: 1 }),
+      db.collection('automation_runs').createIndex({ userId: 1, workspaceId: 1, ranAt: -1 }),
+    ]).catch((e) => {
+      workspaceIndexesPromise = null;
+      console.error('[workspaces] index setup failed', e?.message);
+    });
+  }
+  await workspaceIndexesPromise;
+}
+
+async function getOrCreateMigrationWorkspace(db, userId, key, name) {
+  const now = new Date();
+  const res = await db.collection('workspaces').findOneAndUpdate(
+    { ownerUserId: userId, migrationKey: key },
+    {
+      $setOnInsert: {
+        _id: uuidv4(),
+        ownerUserId: userId,
+        name: cleanWorkspaceName(name),
+        status: 'active',
+        migrationKey: key,
+        createdAt: now,
+      },
+      $set: { updatedAt: now },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+  return res.value || res;
+}
+
+async function ensureUserWorkspaces(db, userId) {
+  await ensureWorkspaceIndexes(db);
+  const now = new Date();
+  const accounts = await db.collection('instagram_accounts').find({ connectedUserId: userId }).toArray();
+  const accountIds = accounts.map(a => a._id);
+
+  for (const account of accounts) {
+    let workspaceId = account.workspaceId;
+    if (!workspaceId) {
+      const workspace = await getOrCreateMigrationWorkspace(
+        db,
+        userId,
+        `ig:${account._id}`,
+        account.username ? `@${account.username}` : 'Instagram Workspace'
+      );
+      workspaceId = workspace._id;
+      await db.collection('instagram_accounts').updateOne(
+        { _id: account._id, connectedUserId: userId },
+        { $set: { workspaceId, updatedAt: now } }
+      );
+    }
+    await db.collection('automations').updateMany(
+      { userId, instagramAccountId: account._id, workspaceId: { $exists: false } },
+      { $set: { workspaceId, updatedAt: now } }
+    );
+    await db.collection('automation_runs').updateMany(
+      { userId, instagramAccountId: account._id, workspaceId: { $exists: false } },
+      { $set: { workspaceId } }
+    );
+  }
+
+  const orphanAutomations = await db.collection('automations').find({
+    userId,
+    workspaceId: { $exists: false },
+    ...(accountIds.length ? { instagramAccountId: { $nin: accountIds } } : {}),
+  }).project({ _id: 1 }).toArray();
+
+  if (orphanAutomations.length > 0) {
+    const fallback = await getOrCreateMigrationWorkspace(db, userId, 'default', 'Default Workspace');
+    const orphanIds = orphanAutomations.map(a => a._id);
+    await db.collection('automations').updateMany(
+      { _id: { $in: orphanIds }, userId },
+      { $set: { workspaceId: fallback._id, updatedAt: now } }
+    );
+    await db.collection('automation_runs').updateMany(
+      { userId, automationId: { $in: orphanIds }, workspaceId: { $exists: false } },
+      { $set: { workspaceId: fallback._id } }
+    );
+  }
+
+  const workspaces = await db.collection('workspaces').find({ ownerUserId: userId }).sort({ createdAt: 1 }).toArray();
+  if (workspaces.length === 0) {
+    const workspace = {
+      _id: uuidv4(),
+      ownerUserId: userId,
+      name: 'Default Workspace',
+      status: 'active',
+      migrationKey: 'default',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.collection('workspaces').insertOne(workspace);
+    return [workspace];
+  }
+  return workspaces;
+}
+
+async function getWorkspaceForRequest(req, db, userId, { requireActive = false } = {}) {
+  const workspaces = await ensureUserWorkspaces(db, userId);
+  const requestedId = workspaceHeader(req);
+  const workspace = requestedId
+    ? workspaces.find(w => w._id === requestedId)
+    : workspaces.find(w => (w.status || 'active') === 'active') || workspaces[0];
+
+  if (!workspace) return { error: json({ error: 'Workspace not found' }, 404) };
+  if (requestedId && !workspace) return { error: json({ error: 'Workspace not found' }, 404) };
+  if (requireActive && (workspace.status || 'active') !== 'active') {
+    return { error: json({ error: 'Workspace is disabled. Re-enable it before making changes.' }, 403) };
+  }
+  return { workspace, workspaces };
+}
+
+async function handleListWorkspaces(req) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const db = await getDb();
+  const workspaces = await ensureUserWorkspaces(db, u.userId);
+  const [accounts, automationCounts] = await Promise.all([
+    db.collection('instagram_accounts').find({ connectedUserId: u.userId }).toArray(),
+    db.collection('automations').aggregate([
+      { $match: { userId: u.userId } },
+      { $group: { _id: '$workspaceId', count: { $sum: 1 }, active: { $sum: { $cond: ['$isActive', 1, 0] } } } },
+    ]).toArray(),
+  ]);
+  const accountByWorkspace = new Map(accounts.map(a => [a.workspaceId, a]));
+  const countsByWorkspace = new Map(automationCounts.map(c => [c._id, c]));
+  return json({
+    workspaces: workspaces.map(w => {
+      const account = accountByWorkspace.get(w._id);
+      const counts = countsByWorkspace.get(w._id) || {};
+      return publicWorkspace(w, {
+        account: account ? {
+          id: account._id,
+          username: account.username,
+          pfp: account.pfp || null,
+          accountType: account.accountType || null,
+        } : null,
+        automationsCount: counts.count || 0,
+        activeAutomationsCount: counts.active || 0,
+      });
+    }),
+  });
+}
+
+async function handleCreateWorkspace(req) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const body = await req.json();
+  const db = await getDb();
+  await ensureUserWorkspaces(db, u.userId);
+  const now = new Date();
+  const workspace = {
+    _id: uuidv4(),
+    ownerUserId: u.userId,
+    name: cleanWorkspaceName(body.name || 'New Workspace'),
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  };
+  await db.collection('workspaces').insertOne(workspace);
+  return json({ workspace: publicWorkspace(workspace) });
+}
+
+async function handleUpdateWorkspace(req, id) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const body = await req.json();
+  const db = await getDb();
+  await ensureUserWorkspaces(db, u.userId);
+  const update = { updatedAt: new Date() };
+  if (Object.prototype.hasOwnProperty.call(body, 'name')) update.name = cleanWorkspaceName(body.name);
+  if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+    if (!['active', 'disabled'].includes(body.status)) return json({ error: 'Invalid workspace status' }, 400);
+    update.status = body.status;
+    if (body.status === 'disabled') update.disabledAt = new Date();
+  }
+  const unset = body.status === 'active' ? { disabledAt: '' } : undefined;
+  const result = await db.collection('workspaces').findOneAndUpdate(
+    { _id: id, ownerUserId: u.userId },
+    unset ? { $set: update, $unset: unset } : { $set: update },
+    { returnDocument: 'after' }
+  );
+  const workspace = result.value || result;
+  if (!workspace) return json({ error: 'Workspace not found' }, 404);
+  return json({ workspace: publicWorkspace(workspace) });
+}
+
+async function handleDeleteWorkspace(req, id) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const db = await getDb();
+  await ensureUserWorkspaces(db, u.userId);
+  const workspace = await db.collection('workspaces').findOne({ _id: id, ownerUserId: u.userId });
+  if (!workspace) return json({ error: 'Workspace not found' }, 404);
+  await Promise.all([
+    db.collection('instagram_accounts').deleteMany({ connectedUserId: u.userId, workspaceId: id }),
+    db.collection('automations').deleteMany({ userId: u.userId, workspaceId: id }),
+    db.collection('automation_runs').deleteMany({ userId: u.userId, workspaceId: id }),
+    db.collection('workspaces').deleteOne({ _id: id, ownerUserId: u.userId }),
+  ]);
+  return json({ success: true });
+}
+
 // ----------- AUTH HANDLERS -----------
 async function handleSignup(req) {
   const { email, password, username } = await req.json();
@@ -38,6 +272,7 @@ async function handleSignup(req) {
       { _id: existing._id },
       { $set: { username, password: await hashPassword(password), otp, otpExpiresAt, updatedAt: new Date() } },
     );
+    await ensureUserWorkspaces(db, existing._id);
   } else {
     const user = {
       _id: uuidv4(),
@@ -50,6 +285,7 @@ async function handleSignup(req) {
       createdAt: new Date(),
     };
     await db.collection('users').insertOne(user);
+    await ensureUserWorkspaces(db, user._id);
   }
 
   try {
@@ -76,6 +312,7 @@ async function handleVerifyOtp(req) {
     { _id: user._id },
     { $set: { emailVerified: true }, $unset: { otp: '', otpExpiresAt: '' } },
   );
+  await ensureUserWorkspaces(db, user._id);
   const token = signToken({ userId: user._id, email: user.email, username: user.username });
   return json({ token, user: { id: user._id, email: user.email, username: user.username } });
 }
@@ -104,6 +341,7 @@ async function handleLogin(req) {
   const ok = await comparePassword(password, user.password);
   if (!ok) return json({ error: 'Invalid credentials' }, 401);
   if (!user.emailVerified) return json({ error: 'Please verify your email first', needsVerification: true, email }, 403);
+  await ensureUserWorkspaces(db, user._id);
   const token = signToken({ userId: user._id, email: user.email, username: user.username });
   return json({ token, user: { id: user._id, email: user.email, username: user.username } });
 }
@@ -111,6 +349,8 @@ async function handleLogin(req) {
 async function handleMe(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
+  const db = await getDb();
+  await ensureUserWorkspaces(db, u.userId);
   return json({ user: { id: u.userId, email: u.email, username: u.username } });
 }
 
@@ -140,12 +380,23 @@ async function handleConnect(req) {
   }
 
   const db = await getDb();
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+
+  const existingAccount = await db.collection('instagram_accounts').findOne({
+    connectedUserId: u.userId,
+    workspaceId: workspace._id,
+  });
+  if (existingAccount) {
+    return json({ error: 'This workspace already has an Instagram account. Create or switch to another workspace to connect a different account.' }, 409);
+  }
 
   const state = crypto.randomUUID();
 
   await db.collection('oauth_states').insertOne({
     state,
     userId: u.userId,
+    workspaceId: workspace._id,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 min
   });
 
@@ -181,8 +432,14 @@ async function handleCallback(req) {
   }
 
   const userId = stateRecord.userId;
+  const workspaceId = stateRecord.workspaceId;
 
   try {
+    const workspace = await db.collection('workspaces').findOne({ _id: workspaceId, ownerUserId: userId });
+    if (!workspace || (workspace.status || 'active') !== 'active') {
+      return NextResponse.redirect(`${BASE_URL}/dashboard?ig=error&msg=${encodeURIComponent('workspace_unavailable')}`);
+    }
+
     const form = new URLSearchParams();
     form.set('client_id', META_APP_ID);
     form.set('client_secret', META_APP_SECRET);
@@ -218,22 +475,36 @@ async function handleCallback(req) {
     const instagramUserId = String(info.user_id || info.id || tokenUserId);
     const appScopedUserId = String(info.id || tokenUserId);
 
-    const db = await getDb();
+    const existingInWorkspace = await db.collection('instagram_accounts').findOne({ connectedUserId: userId, workspaceId });
+    if (existingInWorkspace) {
+      return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&ig=error&msg=${encodeURIComponent('This workspace already has an Instagram account.')}`);
+    }
+
+    const duplicateAccount = await db.collection('instagram_accounts').findOne({
+      connectedUserId: userId,
+      workspaceId: { $ne: workspaceId },
+      $or: [
+        { instagramUserId },
+        { instagramUserId: tokenUserId },
+        { instagramBusinessAccountId: instagramUserId },
+        { instagramBusinessAccountId: tokenUserId },
+        { instagramAppScopedUserId: appScopedUserId },
+        { instagramTokenUserId: tokenUserId },
+      ],
+    });
+    if (duplicateAccount) {
+      return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&ig=error&msg=${encodeURIComponent('This Instagram account is already connected in another workspace.')}`);
+    }
+
     await db.collection('instagram_accounts').findOneAndUpdate(
       {
         connectedUserId: userId,
-        $or: [
-          { instagramUserId },
-          { instagramUserId: tokenUserId },
-          { instagramBusinessAccountId: instagramUserId },
-          { instagramBusinessAccountId: tokenUserId },
-          { instagramAppScopedUserId: appScopedUserId },
-          { instagramTokenUserId: tokenUserId },
-        ],
+        workspaceId,
       },
       {
         $set: {
           connectedUserId: userId,
+          workspaceId,
           instagramUserId,
           instagramBusinessAccountId: instagramUserId,
           instagramAppScopedUserId: appScopedUserId,
@@ -264,10 +535,10 @@ async function handleCallback(req) {
       console.error('Webhook subscribe error', e);
     }
 
-    return NextResponse.redirect(`${BASE_URL}/dashboard?ig=success`);
+    return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&ig=success`);
   } catch (e) {
     console.error('OAuth callback exception', e);
-    return NextResponse.redirect(`${BASE_URL}/dashboard?ig=error&msg=${encodeURIComponent(e.message)}`);
+    return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId || ''}&ig=error&msg=${encodeURIComponent(e.message)}`);
   }
 }
 
@@ -275,9 +546,12 @@ async function handleListAccounts(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
-  const list = await db.collection('instagram_accounts').find({ connectedUserId: u.userId }).toArray();
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId);
+  if (error) return error;
+  const list = await db.collection('instagram_accounts').find({ connectedUserId: u.userId, workspaceId: workspace._id }).toArray();
   return json({ accounts: list.map(a => ({
     id: a._id,
+    workspaceId: a.workspaceId || null,
     instagramUserId: a.instagramUserId,
     username: a.username,
     accountType: a.accountType,
@@ -290,8 +564,10 @@ async function handleDisconnect(req, accountId) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
-  await db.collection('instagram_accounts').deleteOne({ _id: accountId, connectedUserId: u.userId });
-  await db.collection('automations').deleteMany({ userId: u.userId, instagramAccountId: accountId });
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+  await db.collection('instagram_accounts').deleteOne({ _id: accountId, connectedUserId: u.userId, workspaceId: workspace._id });
+  await db.collection('automations').deleteMany({ userId: u.userId, workspaceId: workspace._id, instagramAccountId: accountId });
   return json({ success: true });
 }
 
@@ -299,7 +575,9 @@ async function handleResubscribe(req, accountId) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
-  const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId });
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+  const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId, workspaceId: workspace._id });
   if (!acct) return json({ error: 'Account not found' }, 404);
   try {
     const infoUrl = `https://graph.instagram.com/${API_VERSION}/me?fields=user_id,id,username,account_type&access_token=${encodeURIComponent(acct.accessToken)}`;
@@ -310,7 +588,7 @@ async function handleResubscribe(req, accountId) {
     const instagramUserId = String(info.user_id || info.id || acct.instagramUserId);
     const appScopedUserId = String(info.id || acct.instagramAppScopedUserId || acct.instagramUserId);
     await db.collection('instagram_accounts').updateOne(
-      { _id: accountId, connectedUserId: u.userId },
+      { _id: accountId, connectedUserId: u.userId, workspaceId: workspace._id },
       {
         $set: {
           instagramUserId,
@@ -347,7 +625,9 @@ async function handleCheckSubscription(req, accountId) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
-  const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId });
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId);
+  if (error) return error;
+  const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId, workspaceId: workspace._id });
   if (!acct) return json({ error: 'Account not found' }, 404);
   const url = `https://graph.instagram.com/v22.0/me/subscribed_apps?access_token=${encodeURIComponent(acct.accessToken)}`;
   const r = await fetch(url);
@@ -362,7 +642,9 @@ async function handleListMedia(req) {
   const accountId = url.searchParams.get('accountId');
   if (!accountId) return json({ error: 'accountId required' }, 400);
   const db = await getDb();
-  const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId });
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+  const acct = await db.collection('instagram_accounts').findOne({ _id: accountId, connectedUserId: u.userId, workspaceId: workspace._id });
   if (!acct) return json({ error: 'Account not found' }, 404);
   try {
     const mediaUrl = `https://graph.instagram.com/v22.0/me/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&limit=25&access_token=${encodeURIComponent(acct.accessToken)}`;
@@ -414,19 +696,23 @@ function normalizeMatchType(matchType) {
   return ['exact', 'contains', 'starts_with'].includes(matchType) ? matchType : 'contains';
 }
 
-async function findOwnedInstagramAccount(db, userId, instagramAccountId) {
+async function findOwnedInstagramAccount(db, userId, instagramAccountId, workspaceId) {
   if (!instagramAccountId) return null;
-  return db.collection('instagram_accounts').findOne({
+  const query = {
     _id: instagramAccountId,
     connectedUserId: userId,
-  });
+  };
+  if (workspaceId) query.workspaceId = workspaceId;
+  return db.collection('instagram_accounts').findOne(query);
 }
 
-async function addRunCounts(db, userId, automations) {
+async function addRunCounts(db, userId, automations, workspaceId = null) {
   if (automations.length === 0) return automations;
   const ids = automations.map(a => a._id);
+  const match = { userId, automationId: { $in: ids } };
+  if (workspaceId) match.workspaceId = workspaceId;
   const counts = await db.collection('automation_runs').aggregate([
-    { $match: { userId, automationId: { $in: ids } } },
+    { $match: match },
     { $group: { _id: '$automationId', count: { $sum: 1 } } },
   ]).toArray();
   const countById = new Map(counts.map(row => [row._id, row.count]));
@@ -439,7 +725,9 @@ async function handleCreateAutomation(req) {
   const body = await req.json();
   const type = body.type === 'dm_reply' ? 'dm_reply' : 'comment_dm';
   const db = await getDb();
-  const account = await findOwnedInstagramAccount(db, u.userId, body.instagramAccountId);
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+  const account = await findOwnedInstagramAccount(db, u.userId, body.instagramAccountId, workspace._id);
 
   if (!account) {
     return json({ error: 'Please refresh your connected Instagram accounts and try again.' }, 403);
@@ -456,6 +744,7 @@ async function handleCreateAutomation(req) {
     const doc = {
       _id: uuidv4(),
       userId: u.userId,
+      workspaceId: workspace._id,
       instagramAccountId,
       type: 'dm_reply',
       name: String(name || '').trim() || cleanKeywords[0],
@@ -487,6 +776,7 @@ async function handleCreateAutomation(req) {
   const doc = {
     _id: uuidv4(),
     userId: u.userId,
+    workspaceId: workspace._id,
     instagramAccountId,
     type: 'comment_dm',
     postId: cleanPostId,
@@ -516,8 +806,10 @@ async function handleListAutomations(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
-  const list = await db.collection('automations').find({ userId: u.userId }).sort({ createdAt: -1 }).toArray();
-  return json({ automations: await addRunCounts(db, u.userId, list) });
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId);
+  if (error) return error;
+  const list = await db.collection('automations').find({ userId: u.userId, workspaceId: workspace._id }).sort({ createdAt: -1 }).toArray();
+  return json({ automations: await addRunCounts(db, u.userId, list, workspace._id) });
 }
 
 async function handleUpdateAutomation(req, id) {
@@ -525,7 +817,9 @@ async function handleUpdateAutomation(req, id) {
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const body = await req.json();
   const db = await getDb();
-  const existing = await db.collection('automations').findOne({ _id: id, userId: u.userId });
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+  const existing = await db.collection('automations').findOne({ _id: id, userId: u.userId, workspaceId: workspace._id });
   if (!existing) return json({ error: 'Automation not found' }, 404);
 
   const update = {};
@@ -540,7 +834,7 @@ async function handleUpdateAutomation(req, id) {
 
   if (hasSettingsUpdate) {
     const instagramAccountId = body.instagramAccountId || existing.instagramAccountId;
-    const account = await findOwnedInstagramAccount(db, u.userId, instagramAccountId);
+    const account = await findOwnedInstagramAccount(db, u.userId, instagramAccountId, workspace._id);
     if (!account) {
       return json({ error: 'Please refresh your connected Instagram accounts and try again.' }, 403);
     }
@@ -603,9 +897,9 @@ async function handleUpdateAutomation(req, id) {
   }
 
   update.updatedAt = new Date();
-  await db.collection('automations').updateOne({ _id: id, userId: u.userId }, { $set: update });
-  const doc = await db.collection('automations').findOne({ _id: id, userId: u.userId });
-  const [withCounts] = await addRunCounts(db, u.userId, [doc]);
+  await db.collection('automations').updateOne({ _id: id, userId: u.userId, workspaceId: workspace._id }, { $set: update });
+  const doc = await db.collection('automations').findOne({ _id: id, userId: u.userId, workspaceId: workspace._id });
+  const [withCounts] = await addRunCounts(db, u.userId, [doc], workspace._id);
   return json({ automation: withCounts });
 }
 
@@ -613,7 +907,9 @@ async function handleDeleteAutomation(req, id) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
-  await db.collection('automations').deleteOne({ _id: id, userId: u.userId });
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+  await db.collection('automations').deleteOne({ _id: id, userId: u.userId, workspaceId: workspace._id });
   return json({ success: true });
 }
 
@@ -822,6 +1118,8 @@ async function handleAnalytics(req) {
   const u = getUserFromRequest(req);
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
+  const workspaces = await ensureUserWorkspaces(db, u.userId);
+  const workspaceById = new Map(workspaces.map(w => [w._id, w]));
 
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const allRuns = await db.collection('automation_runs').find({ userId: u.userId }).toArray();
@@ -847,6 +1145,8 @@ async function handleAnalytics(req) {
     const lastRun = runs.length ? runs.map(r => new Date(r.ranAt)).sort((a, b) => b - a)[0] : null;
     return {
       id: a._id,
+      workspaceId: a.workspaceId || null,
+      workspaceName: workspaceById.get(a.workspaceId)?.name || 'Workspace',
       name: a.name || (a.keywords && a.keywords[0]) || a.triggerWord,
       thumb: a.postThumbnail,
       isActive: a.isActive,
@@ -881,8 +1181,11 @@ async function handleAnalytics(req) {
     .slice(0, 50)
     .map(r => {
       const auto = automations.find(a => a._id === r.automationId);
+      const workspace = workspaceById.get(r.workspaceId || auto?.workspaceId);
       return {
         id: r._id,
+        workspaceId: r.workspaceId || auto?.workspaceId || null,
+        workspaceName: workspace?.name || 'Workspace',
         commentText: r.commentText,
         automationName: auto?.name || (auto?.keywords && auto.keywords[0]) || 'Automation',
         flow: r.flow,
@@ -892,9 +1195,27 @@ async function handleAnalytics(req) {
       };
     });
 
+  const workspaceBreakdown = workspaces.map(w => {
+    const workspaceRuns = allRuns.filter(r => r.workspaceId === w._id);
+    const workspaceAutomations = automations.filter(a => a.workspaceId === w._id);
+    const workspaceAccounts = accounts.filter(a => a.workspaceId === w._id);
+    return {
+      id: w._id,
+      name: w.name,
+      status: w.status || 'active',
+      accounts: workspaceAccounts.length,
+      automations: workspaceAutomations.length,
+      activeAutomations: workspaceAutomations.filter(a => a.isActive).length,
+      triggers: workspaceRuns.filter(r => ['direct', 'follow-gated'].includes(r.flow)).length,
+      dms: workspaceRuns.filter(r => r.dmResult?.ok).length,
+    };
+  });
+
   return json({
     summary: {
       totals: {
+        workspaces: workspaces.length,
+        activeWorkspaces: workspaces.filter(w => (w.status || 'active') === 'active').length,
         accounts: accounts.length,
         automations: automations.length,
         activeAutomations: automations.filter(a => a.isActive).length,
@@ -907,6 +1228,7 @@ async function handleAnalytics(req) {
     },
     timeline: days,
     perAutomation,
+    workspaceBreakdown,
     topKeywords,
     funnel: {
       triggers: totalTriggers,
@@ -933,6 +1255,18 @@ async function dispatch(req, params, method) {
 if (path === '/auth/me' && method === 'GET') return handleMe(req);
   if (path === '/auth/forgot-password' && method === 'POST') return handleForgotPassword(req);
   if (path === '/auth/reset-password' && method === 'POST') return handleResetPassword(req);
+
+  // Workspaces
+  if (path === '/workspaces' && method === 'GET') return handleListWorkspaces(req);
+  if (path === '/workspaces' && method === 'POST') return handleCreateWorkspace(req);
+  if (path.startsWith('/workspaces/') && method === 'PUT') {
+    const id = path.split('/')[2];
+    return handleUpdateWorkspace(req, id);
+  }
+  if (path.startsWith('/workspaces/') && method === 'DELETE') {
+    const id = path.split('/')[2];
+    return handleDeleteWorkspace(req, id);
+  }
 
   // Analytics
   if (path === '/analytics' && method === 'GET') return handleAnalytics(req);
@@ -1030,6 +1364,7 @@ async function handleResetPassword(req) {
       $unset: { resetOtp: '', resetOtpExpiresAt: '' },
     },
   );
+  await ensureUserWorkspaces(db, user._id);
   const token = signToken({ userId: user._id, email: user.email, username: user.username });
   return json({ token, user: { id: user._id, email: user.email, username: user.username } });
 }

@@ -16,7 +16,7 @@ import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, Bot, ChevronRight, BarChart3, MessageCircle, Inbox,
-  Pencil,
+  Pencil, Settings, Briefcase,
 } from 'lucide-react';
 
 function Logo() {
@@ -65,6 +65,14 @@ function matchLabel(matchType) {
   return 'contains';
 }
 
+function scopedHeaders(token, workspaceId, extra = {}) {
+  return {
+    ...extra,
+    Authorization: `Bearer ${token}`,
+    ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {}),
+  };
+}
+
 function AutomationTypeDialog({ open, onOpenChange, onSelect }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -108,7 +116,7 @@ function AutomationTypeDialog({ open, onOpenChange, onSelect }) {
   );
 }
 
-function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated }) {
+function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated }) {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [media, setMedia] = useState([]);
   const [loadingMedia, setLoadingMedia] = useState(false);
@@ -137,7 +145,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
   useEffect(() => {
     if (selectedAccount) {
       setLoadingMedia(true);
-      fetch(`/api/instagram/media?accountId=${selectedAccount}`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`/api/instagram/media?accountId=${selectedAccount}`, { headers: scopedHeaders(token, workspaceId) })
         .then(r => r.json()).then(d => setMedia(d.media || []))
         .catch(() => toast.error('Failed to load posts'))
         .finally(() => setLoadingMedia(false));
@@ -161,7 +169,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
       const acct = accounts.find(a => a.id === selectedAccount);
       const res = await fetch('/api/automations', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: scopedHeaders(token, workspaceId, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           instagramAccountId: selectedAccount,
           postId: selectedPost.id, postPermalink: selectedPost.permalink,
@@ -359,7 +367,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, onCreated
   );
 }
 
-function CreateDmReplyDialog({ open, onOpenChange, accounts, token, onCreated }) {
+function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated }) {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [name, setName] = useState('');
   const [keywords, setKeywords] = useState([]);
@@ -392,7 +400,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, onCreated })
     try {
       const res = await fetch('/api/automations', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: scopedHeaders(token, workspaceId, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           type: 'dm_reply',
           instagramAccountId: selectedAccount,
@@ -527,7 +535,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, onCreated })
   );
 }
 
-function EditAutomationDialog({ automation, accounts, token, onOpenChange, onSaved }) {
+function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpenChange, onSaved }) {
   const open = !!automation;
   const isDmReply = automation?.type === 'dm_reply';
   const [selectedAccount, setSelectedAccount] = useState('');
@@ -571,12 +579,12 @@ function EditAutomationDialog({ automation, accounts, token, onOpenChange, onSav
   useEffect(() => {
     if (!open || !selectedAccount || isDmReply) return;
     setLoadingMedia(true);
-    fetch(`/api/instagram/media?accountId=${selectedAccount}`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`/api/instagram/media?accountId=${selectedAccount}`, { headers: scopedHeaders(token, workspaceId) })
       .then(r => r.json())
       .then(d => setMedia(d.media || []))
       .catch(() => toast.error('Failed to load posts'))
       .finally(() => setLoadingMedia(false));
-  }, [open, selectedAccount, isDmReply, token]);
+  }, [open, selectedAccount, isDmReply, token, workspaceId]);
 
   const addKeyword = () => {
     const k = kwInput.trim().toLowerCase();
@@ -617,7 +625,7 @@ function EditAutomationDialog({ automation, accounts, token, onOpenChange, onSav
 
       const res = await fetch(`/api/automations/${automation._id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: scopedHeaders(token, workspaceId, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
       const data = await res.json();
@@ -793,7 +801,7 @@ function EditAutomationDialog({ automation, accounts, token, onOpenChange, onSav
   );
 }
 
-function AutomationCard({ a, accounts, onToggle, onDelete, onEdit }) {
+function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, disabledActions = false }) {
   const acct = accounts.find(x => x.id === a.instagramAccountId);
   const keywords = keywordList(a);
   const isDmReply = a.type === 'dm_reply';
@@ -830,16 +838,16 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit }) {
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <span className={`text-xs font-medium ${a.isActive ? 'text-emerald-600' : 'text-muted-foreground'}`}>{a.isActive ? 'ON' : 'OFF'}</span>
-                <Switch checked={a.isActive} onCheckedChange={() => onToggle(a)} />
+                <Switch checked={a.isActive} disabled={disabledActions} onCheckedChange={() => onToggle(a)} />
               </div>
             </div>
             <div className="flex items-center justify-between mt-5 border-t pt-3">
               <span className="text-sm font-medium text-slate-600">{runLabel(a.runsCount || 0)}</span>
               <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={() => onEdit(a)} className="text-slate-700 hover:bg-slate-100">
+                <Button variant="ghost" size="sm" disabled={disabledActions} onClick={() => onEdit(a)} className="text-slate-700 hover:bg-slate-100">
                   <Pencil className="w-4 h-4 mr-1" /> Edit
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => onDelete(a._id)} className="text-rose-500 hover:text-rose-600 hover:bg-rose-50">
+                <Button variant="ghost" size="sm" disabled={disabledActions} onClick={() => onDelete(a._id)} className="text-rose-500 hover:text-rose-600 hover:bg-rose-50">
                   <Trash2 className="w-4 h-4 mr-1" /> Delete
                 </Button>
               </div>
@@ -851,16 +859,68 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit }) {
   );
 }
 
+function WorkspaceSettingsDialog({ open, onOpenChange, workspace, onRename, onStatusChange, onDelete }) {
+  const [name, setName] = useState('');
+
+  useEffect(() => {
+    if (workspace) setName(workspace.name || '');
+  }, [workspace]);
+
+  if (!workspace) return null;
+  const isActive = (workspace.status || 'active') === 'active';
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Settings className="w-5 h-5 text-violet-600" /> Workspace settings
+          </DialogTitle>
+          <DialogDescription>Rename, disable, re-enable, or permanently delete this workspace.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-5 py-2">
+          <div className="space-y-2">
+            <Label htmlFor="workspace-name">Workspace name</Label>
+            <div className="flex gap-2">
+              <Input id="workspace-name" value={name} onChange={(e) => setName(e.target.value)} />
+              <Button type="button" onClick={() => onRename(name)} disabled={!name.trim() || name.trim() === workspace.name}>
+                Save
+              </Button>
+            </div>
+          </div>
+          <div className="rounded-lg border p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="font-medium text-sm">Workspace enabled</p>
+              <p className="text-xs text-muted-foreground">Disabled workspaces stay visible but cannot run or edit automations.</p>
+            </div>
+            <Switch checked={isActive} onCheckedChange={(checked) => onStatusChange(checked ? 'active' : 'disabled')} />
+          </div>
+          <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
+            <p className="font-medium text-sm text-rose-700">Hard delete</p>
+            <p className="text-xs text-rose-600 mt-1">Deletes this workspace, its Instagram account, automations, and analytics runs.</p>
+            <Button type="button" variant="destructive" className="mt-3" onClick={onDelete}>
+              <Trash2 className="w-4 h-4 mr-1" /> Delete workspace
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
   const [accounts, setAccounts] = useState([]);
   const [automations, setAutomations] = useState([]);
   const [showTypeChooser, setShowTypeChooser] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateDmReply, setShowCreateDmReply] = useState(false);
   const [editingAutomation, setEditingAutomation] = useState(null);
+  const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
@@ -871,25 +931,56 @@ export default function DashboardPage() {
     try { setUser(JSON.parse(u)); } catch {}
   }, [router]);
 
-  const refresh = useCallback(async () => {
+  const loadWorkspaces = useCallback(async (preferredId = '') => {
     if (!token) return;
     try {
+      const res = await fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load workspaces');
+      const list = data.workspaces || [];
+      setWorkspaces(list);
+      const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const urlWorkspaceId = params?.get('workspaceId') || '';
+      const stored = typeof window !== 'undefined' ? localStorage.getItem('selectedWorkspaceId') : '';
+      const nextId =
+        [preferredId, urlWorkspaceId, selectedWorkspaceId, stored].find(id => id && list.some(w => w.id === id)) ||
+        list.find(w => w.status === 'active')?.id ||
+        list[0]?.id ||
+        '';
+      if (nextId) {
+        setSelectedWorkspaceId(nextId);
+        localStorage.setItem('selectedWorkspaceId', nextId);
+      }
+    } catch (e) {
+      toast.error(e.message);
+    }
+  }, [token, selectedWorkspaceId]);
+
+  const refresh = useCallback(async () => {
+    if (!token || !selectedWorkspaceId) return;
+    try {
       const [a, b] = await Promise.all([
-        fetch('/api/instagram/accounts', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
-        fetch('/api/automations', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+        fetch('/api/instagram/accounts', { headers: scopedHeaders(token, selectedWorkspaceId) }).then(r => r.json()),
+        fetch('/api/automations', { headers: scopedHeaders(token, selectedWorkspaceId) }).then(r => r.json()),
       ]);
       setAccounts(a.accounts || []);
       setAutomations(b.automations || []);
     } catch { toast.error('Failed to load data'); }
-  }, [token]);
+  }, [token, selectedWorkspaceId]);
 
-  useEffect(() => { if (token) refresh(); }, [refresh, token]);
+  useEffect(() => { if (token) loadWorkspaces(); }, [loadWorkspaces, token]);
+  useEffect(() => { if (token && selectedWorkspaceId) refresh(); }, [refresh, token, selectedWorkspaceId]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('ig') === 'success') { toast.success('Instagram account connected!'); window.history.replaceState({}, '', '/dashboard'); refresh(); }
+    const workspaceId = params.get('workspaceId');
+    if (workspaceId) {
+      localStorage.setItem('selectedWorkspaceId', workspaceId);
+      setSelectedWorkspaceId(workspaceId);
+    }
+    if (params.get('ig') === 'success') { toast.success('Instagram account connected!'); window.history.replaceState({}, '', '/dashboard'); loadWorkspaces(workspaceId || ''); refresh(); }
     else if (params.get('ig') === 'error') { toast.error('Connection failed: ' + (params.get('msg') || 'unknown')); window.history.replaceState({}, '', '/dashboard'); }
-  }, [refresh]);
+  }, [loadWorkspaces, refresh]);
 
   const onLogout = () => {
     localStorage.removeItem('token'); localStorage.removeItem('user');
@@ -897,9 +988,11 @@ export default function DashboardPage() {
   };
 
   const connectIG = async () => {
+    if (!selectedWorkspaceId) { toast.error('Choose a workspace first'); return; }
+    if (accounts.length > 0) { toast.error('This workspace already has an Instagram account. Create a new workspace for another account.'); return; }
     setConnecting(true);
     try {
-      const res = await fetch('/api/instagram/connect', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch('/api/instagram/connect', { headers: scopedHeaders(token, selectedWorkspaceId) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       window.location.href = data.url;
@@ -908,23 +1001,85 @@ export default function DashboardPage() {
 
   const toggle = async (a) => {
     const res = await fetch(`/api/automations/${a._id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      method: 'PUT', headers: scopedHeaders(token, selectedWorkspaceId, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({ isActive: !a.isActive }),
     });
     if (res.ok) { toast.success(`Automation ${!a.isActive ? 'enabled' : 'disabled'}`); refresh(); }
   };
   const remove = async (id) => {
     if (!confirm('Delete this automation?')) return;
-    const res = await fetch(`/api/automations/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`/api/automations/${id}`, { method: 'DELETE', headers: scopedHeaders(token, selectedWorkspaceId) });
     if (res.ok) { toast.success('Deleted'); refresh(); }
   };
   const disconnectAccount = async (id) => {
     if (!confirm('Disconnect this Instagram account? All linked automations will be removed.')) return;
-    const res = await fetch(`/api/instagram/accounts/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-    if (res.ok) { toast.success('Disconnected'); refresh(); }
+    const res = await fetch(`/api/instagram/accounts/${id}`, { method: 'DELETE', headers: scopedHeaders(token, selectedWorkspaceId) });
+    if (res.ok) { toast.success('Disconnected'); await loadWorkspaces(selectedWorkspaceId); refresh(); }
+  };
+
+  const selectWorkspace = (id) => {
+    setSelectedWorkspaceId(id);
+    localStorage.setItem('selectedWorkspaceId', id);
+  };
+
+  const createWorkspace = async () => {
+    const name = window.prompt('Workspace name', 'New Workspace');
+    if (!name || !name.trim()) return;
+    const res = await fetch('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok) { toast.error(data.error || 'Failed to create workspace'); return; }
+    toast.success('Workspace created');
+    await loadWorkspaces(data.workspace.id);
+  };
+
+  const renameWorkspace = async (name) => {
+    const res = await fetch(`/api/workspaces/${selectedWorkspaceId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok) { toast.error(data.error || 'Failed to rename workspace'); return; }
+    toast.success('Workspace updated');
+    await loadWorkspaces(data.workspace.id);
+  };
+
+  const setWorkspaceStatus = async (status) => {
+    const res = await fetch(`/api/workspaces/${selectedWorkspaceId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ status }),
+    });
+    const data = await res.json();
+    if (!res.ok) { toast.error(data.error || 'Failed to update workspace'); return; }
+    toast.success(status === 'active' ? 'Workspace enabled' : 'Workspace disabled');
+    await loadWorkspaces(data.workspace.id);
+    refresh();
+  };
+
+  const deleteWorkspace = async () => {
+    const workspace = workspaces.find(w => w.id === selectedWorkspaceId);
+    if (!workspace) return;
+    if (!confirm(`Permanently delete "${workspace.name}" and all its workspace data?`)) return;
+    const res = await fetch(`/api/workspaces/${selectedWorkspaceId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) { toast.error(data.error || 'Failed to delete workspace'); return; }
+    toast.success('Workspace deleted');
+    setShowWorkspaceSettings(false);
+    setSelectedWorkspaceId('');
+    await loadWorkspaces('');
   };
 
   if (!token || !user) return null;
+  const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId);
+  const workspaceActive = (selectedWorkspace?.status || 'active') === 'active';
   const activeCount = automations.filter(a => a.isActive).length;
 
   return (
@@ -932,10 +1087,30 @@ export default function DashboardPage() {
       <header className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-20">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <Logo />
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
+            <div className="hidden sm:flex items-center gap-2">
+              <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
+                <SelectTrigger className="w-48 bg-white">
+                  <SelectValue placeholder="Workspace" />
+                </SelectTrigger>
+                <SelectContent>
+                  {workspaces.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}{w.status === 'disabled' ? ' (disabled)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button variant="ghost" size="icon" title="New workspace" onClick={createWorkspace}>
+                <Plus className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" title="Workspace settings" onClick={() => setShowWorkspaceSettings(true)} disabled={!selectedWorkspace}>
+                <Settings className="w-4 h-4" />
+              </Button>
+            </div>
             <div className="hidden md:flex items-center gap-2 text-sm">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-              <span className="text-muted-foreground">{activeCount} active</span>
+              <div className={`w-2 h-2 rounded-full ${workspaceActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></div>
+              <span className="text-muted-foreground">{workspaceActive ? `${activeCount} active` : 'disabled'}</span>
             </div>
             <Button variant="ghost" size="sm" onClick={() => router.push('/analytics')}>
               <BarChart3 className="w-4 h-4 mr-1" /> Analytics
@@ -947,6 +1122,38 @@ export default function DashboardPage() {
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
+        <div className="sm:hidden mb-4 flex items-center gap-2">
+          <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
+            <SelectTrigger className="flex-1 bg-white">
+              <SelectValue placeholder="Workspace" />
+            </SelectTrigger>
+            <SelectContent>
+              {workspaces.map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}{w.status === 'disabled' ? ' (disabled)' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="icon" onClick={createWorkspace}><Plus className="w-4 h-4" /></Button>
+          <Button variant="outline" size="icon" onClick={() => setShowWorkspaceSettings(true)} disabled={!selectedWorkspace}><Settings className="w-4 h-4" /></Button>
+        </div>
+        {selectedWorkspace && (
+          <div className="mb-6 flex items-center justify-between gap-3 rounded-lg border bg-white p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-violet-100 flex items-center justify-center">
+                <Briefcase className="w-5 h-5 text-violet-600" />
+              </div>
+              <div>
+                <p className="font-semibold">{selectedWorkspace.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {workspaceActive ? 'Active workspace' : 'Disabled workspace. Enable it before connecting accounts or editing automations.'}
+                </p>
+              </div>
+            </div>
+            {!workspaceActive && <Badge className="bg-slate-100 text-slate-600">Disabled</Badge>}
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
           <Card className="border-0 shadow-sm bg-gradient-to-br from-indigo-500 to-violet-600 text-white">
             <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">Connected Accounts</p><p className="text-3xl font-bold">{accounts.length}</p></CardContent>
@@ -962,8 +1169,8 @@ export default function DashboardPage() {
         <section className="mb-10">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold flex items-center gap-2"><Instagram className="w-5 h-5 text-violet-600" /> Connected Accounts</h2>
-            <Button onClick={connectIG} disabled={connecting} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
-              <Plus className="w-4 h-4 mr-2" /> {connecting ? 'Redirecting...' : 'Connect Instagram'}
+            <Button onClick={connectIG} disabled={connecting || !workspaceActive || accounts.length > 0} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
+              <Plus className="w-4 h-4 mr-2" /> {connecting ? 'Redirecting...' : accounts.length > 0 ? 'Account connected' : 'Connect Instagram'}
             </Button>
           </div>
           {accounts.length === 0 ? (
@@ -971,7 +1178,7 @@ export default function DashboardPage() {
               <CardContent className="py-12 text-center">
                 <Instagram className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
                 <p className="text-muted-foreground mb-4">No Instagram accounts connected yet.</p>
-                <Button onClick={connectIG} disabled={connecting} className="bg-gradient-to-r from-indigo-600 to-violet-600">Connect Your First Account</Button>
+                <Button onClick={connectIG} disabled={connecting || !workspaceActive} className="bg-gradient-to-r from-indigo-600 to-violet-600">Connect Your First Account</Button>
               </CardContent>
             </Card>
           ) : (
@@ -990,7 +1197,7 @@ export default function DashboardPage() {
                       <div><p className="font-semibold">@{a.username}</p><p className="text-xs text-muted-foreground">{a.accountType || 'Business'}</p></div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="icon" title="Disconnect" onClick={() => disconnectAccount(a.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
+                      <Button variant="ghost" size="icon" title="Disconnect" disabled={!workspaceActive} onClick={() => disconnectAccount(a.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
                     </div>
                   </CardContent>
                 </Card>
@@ -1003,7 +1210,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold flex items-center gap-2"><Zap className="w-5 h-5 text-amber-500" /> Automations</h2>
             {accounts.length > 0 && (
-              <Button onClick={() => setShowTypeChooser(true)} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
+              <Button disabled={!workspaceActive} onClick={() => setShowTypeChooser(true)} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
                 <Plus className="w-4 h-4 mr-2" /> New Automation
               </Button>
             )}
@@ -1027,7 +1234,7 @@ export default function DashboardPage() {
                 </Card>
               ) : (
                 <div className="space-y-3">
-                  {automations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} />)}
+                  {automations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} disabledActions={!workspaceActive} />)}
                 </div>
               )}
             </>
@@ -1044,9 +1251,17 @@ export default function DashboardPage() {
           else setShowCreate(true);
         }}
       />
-      <CreateAutomationDialog open={showCreate} onOpenChange={setShowCreate} accounts={accounts} token={token} onCreated={() => refresh()} />
-      <CreateDmReplyDialog open={showCreateDmReply} onOpenChange={setShowCreateDmReply} accounts={accounts} token={token} onCreated={() => refresh()} />
-      <EditAutomationDialog automation={editingAutomation} onOpenChange={() => setEditingAutomation(null)} accounts={accounts} token={token} onSaved={() => refresh()} />
+      <CreateAutomationDialog open={showCreate} onOpenChange={setShowCreate} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => refresh()} />
+      <CreateDmReplyDialog open={showCreateDmReply} onOpenChange={setShowCreateDmReply} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => refresh()} />
+      <EditAutomationDialog automation={editingAutomation} onOpenChange={() => setEditingAutomation(null)} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onSaved={() => refresh()} />
+      <WorkspaceSettingsDialog
+        open={showWorkspaceSettings}
+        onOpenChange={setShowWorkspaceSettings}
+        workspace={selectedWorkspace}
+        onRename={renameWorkspace}
+        onStatusChange={setWorkspaceStatus}
+        onDelete={deleteWorkspace}
+      />
     </div>
   );
 }

@@ -153,6 +153,16 @@ async function findConnectedAccountForMessaging(dbi, ids) {
   });
 }
 
+async function findConnectedAccountForEntry(dbi, ids) {
+  return findConnectedAccountForMessaging(dbi, ids);
+}
+
+async function isWorkspaceActive(dbi, workspaceId) {
+  if (!workspaceId) return true;
+  const workspace = await dbi.collection('workspaces').findOne({ _id: workspaceId });
+  return !!workspace && (workspace.status || 'active') === 'active';
+}
+
 async function rememberWebhookIds(dbi, accountId, ids) {
   const candidates = [...new Set(ids.filter(Boolean).map(String))];
   if (!accountId || candidates.length === 0) return;
@@ -219,24 +229,40 @@ async function processJob(job) {
         text: textPreview(v.text),
       });
 
+      const acct = await findConnectedAccountForEntry(dbi, [igUserId]);
+      if (!acct) {
+        logAutomation('comment-dm', 'skipped because connected instagram account was not found', {
+          jobId: job.id,
+          igUserId,
+          mediaId,
+        });
+        continue;
+      }
+      await rememberWebhookIds(dbi, acct._id, [igUserId]);
+
+      if (!(await isWorkspaceActive(dbi, acct.workspaceId))) {
+        logAutomation('comment-dm', 'skipped disabled workspace', {
+          jobId: job.id,
+          workspaceId: acct.workspaceId || null,
+          instagramAccountId: acct._id,
+        });
+        continue;
+      }
+
       const automations = await dbi.collection('automations').find({
-        postId: mediaId, isActive: true,
+        instagramAccountId: acct._id,
+        workspaceId: acct.workspaceId,
+        postId: mediaId,
+        isActive: true,
       }).toArray();
       logAutomation('comment-dm', 'active automations loaded for post', {
         jobId: job.id,
         mediaId,
+        instagramAccountId: acct._id,
+        workspaceId: acct.workspaceId || null,
         count: automations.length,
       });
       if (automations.length === 0) continue;
-
-      const acct = await dbi.collection('instagram_accounts').findOne({ _id: automations[0].instagramAccountId });
-      if (!acct) {
-        logAutomation('comment-dm', 'skipped because instagram account was not found', {
-          jobId: job.id,
-          instagramAccountId: automations[0].instagramAccountId,
-        });
-        continue;
-      }
 
       for (const auto of automations) {
         const keywords = auto.keywords?.length ? auto.keywords : (auto.triggerWord ? [auto.triggerWord] : []);
@@ -295,6 +321,7 @@ async function processJob(job) {
           _id: uuidv4(),
           automationId: auto._id,
           userId: auto.userId,
+          workspaceId: auto.workspaceId || acct.workspaceId || null,
           instagramAccountId: auto.instagramAccountId,
           commentId, fromUserId: fromId, commentText: v.text,
           replyUsed: reply, replyResult: r1, dmResult: rDM,
@@ -352,6 +379,14 @@ async function processJob(job) {
           });
           continue;
         }
+        if (!(await isWorkspaceActive(dbi, auto.workspaceId || acct.workspaceId))) {
+          logAutomation('follow-gate', 'skipped disabled workspace', {
+            jobId: job.id,
+            automationId,
+            workspaceId: auto.workspaceId || acct.workspaceId || null,
+          });
+          continue;
+        }
 
         const followCheck = await checkUserFollowsBusiness(acct.accessToken, senderId);
         logAutomation('follow-gate', 'follow check completed', {
@@ -369,6 +404,7 @@ async function processJob(job) {
           );
           await dbi.collection('automation_runs').insertOne({
             _id: uuidv4(), automationId: auto._id, userId: auto.userId,
+            workspaceId: auto.workspaceId || acct.workspaceId || null,
             instagramAccountId: auto.instagramAccountId,
             fromUserId: senderId, flow: 'follow-not-verified',
             followCheck, retryResult: retry, ranAt: new Date(),
@@ -384,6 +420,7 @@ async function processJob(job) {
 
         await dbi.collection('automation_runs').insertOne({
           _id: uuidv4(), automationId: auto._id, userId: auto.userId,
+          workspaceId: auto.workspaceId || acct.workspaceId || null,
           instagramAccountId: auto.instagramAccountId,
           fromUserId: senderId, dmResult: rDM,
           flow: 'follow-confirmed', followCheck, ranAt: new Date(),
@@ -419,6 +456,14 @@ async function processJob(job) {
           continue;
         }
         await rememberWebhookIds(dbi, acct._id, accountLookupIds);
+        if (!(await isWorkspaceActive(dbi, acct.workspaceId))) {
+          logAutomation('dm-auto-reply', 'skipped disabled workspace', {
+            jobId: job.id,
+            workspaceId: acct.workspaceId || null,
+            instagramAccountId: acct._id,
+          });
+          continue;
+        }
         logAutomation('dm-auto-reply', 'connected account matched', {
           jobId: job.id,
           igUserId,
@@ -430,6 +475,7 @@ async function processJob(job) {
 
         const automations = await dbi.collection('automations').find({
           instagramAccountId: acct._id,
+          workspaceId: acct.workspaceId,
           type: 'dm_reply',
           isActive: true,
         }).toArray();
@@ -481,6 +527,7 @@ async function processJob(job) {
             _id: uuidv4(),
             automationId: auto._id,
             userId: auto.userId,
+            workspaceId: auto.workspaceId || acct.workspaceId || null,
             instagramAccountId: auto.instagramAccountId,
             fromUserId: senderId,
             commentText: incomingText, // re-use field for analytics
