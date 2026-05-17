@@ -692,8 +692,8 @@ export default function DashboardPage() {
                       <div><p className="font-semibold">@{a.username}</p><p className="text-xs text-muted-foreground">{a.accountType || 'Business'}</p></div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="icon" title="Check webhook subscription" onClick={() => checkSub(a.id)}><Activity className="w-4 h-4 text-emerald-600" /></Button>
-                      <Button variant="ghost" size="icon" title="Re-subscribe to webhooks" onClick={() => resubscribe(a.id)}><RefreshCw className="w-4 h-4 text-blue-600" /></Button>
+                      {/* <Button variant="ghost" size="icon" title="Check webhook subscription" onClick={() => checkSub(a.id)}><Activity className="w-4 h-4 text-emerald-600" /></Button>
+                      <Button variant="ghost" size="icon" title="Re-subscribe to webhooks" onClick={() => resubscribe(a.id)}><RefreshCw className="w-4 h-4 text-blue-600" /></Button> */}
                       <Button variant="ghost" size="icon" title="Disconnect" onClick={() => disconnectAccount(a.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
                     </div>
                   </CardContent>
