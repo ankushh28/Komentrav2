@@ -5,6 +5,15 @@ import { getDb } from '@/lib/mongo';
 import { hashPassword, comparePassword, signToken, getUserFromRequest } from '@/lib/auth';
 import { sendOtpEmail, generateOtp, sendPasswordResetOtpEmail, sendContactEmail } from '@/lib/email';
 import { getQueue } from '@/lib/queue';
+import { PLAN_IDS, getPlan, isPaidPlan, publicPlan } from '@/lib/plans';
+import {
+  checkCanActivateAutomation,
+  checkCanConnectAccount,
+  checkCanCreateWorkspace,
+  ensureEntitlementIndexes,
+  getBillingStatus,
+  getUserEntitlements,
+} from '@/lib/entitlements';
 
 const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
@@ -12,9 +21,14 @@ const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'test';
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL;
 const API_VERSION = process.env.META_API_VERSION || 'v23.0';
 const REDIRECT_URI = `${BASE_URL}/api/instagram/callback`;
+const RAZORPAY_API_BASE = 'https://api.razorpay.com/v1';
 
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
+}
+
+function billingBlocked(details, status = 402) {
+  return json(details, status);
 }
 
 const CONTACT_TOPICS = new Set(['general', 'support', 'privacy', 'billing', 'partnership']);
@@ -221,6 +235,8 @@ async function handleCreateWorkspace(req) {
   const body = await req.json();
   const db = await getDb();
   await ensureUserWorkspaces(db, u.userId);
+  const entitlement = await checkCanCreateWorkspace(db, u.userId);
+  if (!entitlement.ok) return billingBlocked(entitlement.details);
   const now = new Date();
   const workspace = {
     _id: uuidv4(),
@@ -293,13 +309,14 @@ async function getAudienceForRequest(req) {
   const db = await getDb();
   const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId);
   if (error) return { response: error };
-  return { db, user: u, workspace };
+  const { plan } = await getUserEntitlements(db, u.userId);
+  return { db, user: u, workspace, plan };
 }
 
 async function handleListAudience(req) {
   const ctx = await getAudienceForRequest(req);
   if (ctx.response) return ctx.response;
-  const { db, user, workspace } = ctx;
+  const { db, user, workspace, plan } = ctx;
   const url = new URL(req.url);
   const search = url.searchParams.get('search')?.trim();
   const query = { userId: user.userId, workspaceId: workspace._id };
@@ -316,10 +333,11 @@ async function handleListAudience(req) {
   const members = await db.collection('audience_members')
     .find(query)
     .sort({ lastTriggeredAt: -1, updatedAt: -1 })
-    .limit(1000)
+    .limit(plan.audienceVisibleLimit)
     .toArray();
 
   return json({
+    limit: plan.audienceVisibleLimit,
     audience: members.map(member => ({
       id: member._id,
       userId: member.userId,
@@ -345,7 +363,17 @@ async function handleListAudience(req) {
 async function handleExportAudience(req) {
   const ctx = await getAudienceForRequest(req);
   if (ctx.response) return ctx.response;
-  const { db, user, workspace } = ctx;
+  const { db, user, workspace, plan } = ctx;
+  if (!plan.canExportAudience) {
+    return billingBlocked({
+      error: 'Audience export is available on Creator, Growth, and Agency plans.',
+      code: 'audience_export_locked',
+      billing: {
+        plan: publicPlan(plan),
+        upgradePlanId: 'creator',
+      },
+    });
+  }
   const members = await db.collection('audience_members')
     .find({ userId: user.userId, workspaceId: workspace._id })
     .sort({ lastTriggeredAt: -1, updatedAt: -1 })
@@ -513,6 +541,8 @@ async function handleConnect(req) {
   if (existingAccount) {
     return json({ error: 'This workspace already has an Instagram account. Create or switch to another workspace to connect a different account.' }, 409);
   }
+  const entitlement = await checkCanConnectAccount(db, u.userId);
+  if (!entitlement.ok) return billingBlocked(entitlement.details);
 
   const state = crypto.randomUUID();
 
@@ -887,6 +917,8 @@ async function handleCreateAutomation(req) {
     if (!instagramAccountId || cleanKeywords.length === 0 || cleanReplies.length === 0) {
       return json({ error: 'Need an account, at least 1 keyword, and 1 reply variant.' }, 400);
     }
+    const entitlement = await checkCanActivateAutomation(db, u.userId, workspace._id);
+    if (!entitlement.ok) return billingBlocked(entitlement.details);
     const doc = {
       _id: uuidv4(),
       userId: u.userId,
@@ -930,6 +962,8 @@ async function handleCreateAutomation(req) {
       existingAutomationId: duplicate._id,
     }, 409);
   }
+  const entitlement = await checkCanActivateAutomation(db, u.userId, workspace._id);
+  if (!entitlement.ok) return billingBlocked(entitlement.details);
   const doc = {
     _id: uuidv4(),
     userId: u.userId,
@@ -1085,6 +1119,12 @@ async function handleUpdateAutomation(req, id) {
         existingAutomationId: duplicate._id,
       }, 409);
     }
+  }
+
+  const finalActive = typeof update.isActive === 'boolean' ? update.isActive : !!existing.isActive;
+  if (!existing.isActive && finalActive) {
+    const entitlement = await checkCanActivateAutomation(db, u.userId, workspace._id, existing._id);
+    if (!entitlement.ok) return billingBlocked(entitlement.details);
   }
 
   update.updatedAt = new Date();
@@ -1329,17 +1369,19 @@ async function handleAnalytics(req) {
   if (!u) return json({ error: 'Unauthorized' }, 401);
   const db = await getDb();
   const workspaces = await ensureUserWorkspaces(db, u.userId);
+  const { plan } = await getUserEntitlements(db, u.userId);
   const workspaceById = new Map(workspaces.map(w => [w._id, w]));
 
-  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const allRuns = await db.collection('automation_runs').find({ userId: u.userId }).toArray();
+  const lookbackDays = plan.analyticsLookbackDays;
+  const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
+  const allRuns = await db.collection('automation_runs').find({ userId: u.userId, ranAt: { $gte: since } }).toArray();
   const recent = allRuns.filter(r => r.ranAt && new Date(r.ranAt) >= since);
   const automations = await db.collection('automations').find({ userId: u.userId }).toArray();
   const accounts = await db.collection('instagram_accounts').find({ connectedUserId: u.userId }).toArray();
 
-  // Daily timeline (last 7 days)
+  // Daily timeline for the plan lookback window
   const days = [];
-  for (let i = 6; i >= 0; i--) {
+  for (let i = lookbackDays - 1; i >= 0; i--) {
     const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - i);
     const next = new Date(d); next.setDate(next.getDate() + 1);
     const count = recent.filter(r => new Date(r.ranAt) >= d && new Date(r.ranAt) < next).length;
@@ -1430,11 +1472,13 @@ async function handleAnalytics(req) {
         automations: automations.length,
         activeAutomations: automations.filter(a => a.isActive).length,
         totalTriggers,
-        totalReplies,
-        totalDMs,
-        followConvRate,
+      totalReplies,
+      totalDMs,
+      followConvRate,
+      analyticsLookbackDays: lookbackDays,
       },
       runsLast7Days: recent.length,
+      runsInLookback: recent.length,
     },
     timeline: days,
     perAutomation,
@@ -1449,6 +1493,357 @@ async function handleAnalytics(req) {
     },
     recentMatches,
   });
+}
+
+// ----------- BILLING -----------
+function razorpayAuthHeader() {
+  if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) return null;
+  return `Basic ${Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64')}`;
+}
+
+async function razorpayRequest(path, options = {}) {
+  const auth = razorpayAuthHeader();
+  if (!auth) {
+    const error = new Error('Razorpay is not configured yet. Please try again later.');
+    error.status = 503;
+    throw error;
+  }
+  const res = await fetch(`${RAZORPAY_API_BASE}${path}`, {
+    ...options,
+    headers: {
+      Authorization: auth,
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(data?.error?.description || data?.error?.reason || 'Razorpay request failed');
+    error.status = res.status;
+    error.details = data;
+    throw error;
+  }
+  return data;
+}
+
+function razorpayTimestamp(value) {
+  return value ? new Date(Number(value) * 1000) : null;
+}
+
+function billingWebhookUrl(req) {
+  const base = process.env.NEXT_PUBLIC_BASE_URL || new URL(req.url).origin;
+  return `${base.replace(/\/$/, '')}/api/billing/webhook`;
+}
+
+function configuredRazorpayPlanId(planId) {
+  const plan = getPlan(planId);
+  return plan.razorpayPlanEnv ? process.env[plan.razorpayPlanEnv] : '';
+}
+
+function appPlanIdFromRazorpayPlanId(razorpayPlanId) {
+  if (!razorpayPlanId) return null;
+  return PLAN_IDS.find((planId) => configuredRazorpayPlanId(planId) === razorpayPlanId) || null;
+}
+
+async function getOrCreateRazorpayCustomer(db, user) {
+  if (user?.subscription?.providerCustomerId) return user.subscription.providerCustomerId;
+  const customer = await razorpayRequest('/customers', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: user.username || user.email,
+      email: user.email,
+      notes: { userId: user._id },
+    }),
+  });
+  await db.collection('users').updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        'subscription.provider': 'razorpay',
+        'subscription.providerCustomerId': customer.id,
+        'subscription.updatedAt': new Date(),
+      },
+    },
+  );
+  return customer.id;
+}
+
+async function handleBillingStatus(req) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const db = await getDb();
+  await ensureUserWorkspaces(db, u.userId);
+  const status = await getBillingStatus(db, u.userId);
+  return json({
+    ...status,
+    webhookUrl: billingWebhookUrl(req),
+    razorpayConfigured: !!razorpayAuthHeader(),
+  });
+}
+
+async function handleBillingCheckout(req) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const { planId } = await req.json();
+  const plan = getPlan(planId);
+  if (!isPaidPlan(plan.id)) return json({ error: 'Choose a paid plan to upgrade.' }, 400);
+  const planEnv = plan.razorpayPlanEnv;
+  const razorpayPlanId = planEnv ? process.env[planEnv] : '';
+  if (!razorpayPlanId) {
+    return json({ error: `${plan.name} payments are not configured yet. Please contact support.` }, 503);
+  }
+
+  const db = await getDb();
+  const { user, subscription } = await getUserEntitlements(db, u.userId);
+  if (!user) return json({ error: 'User not found' }, 404);
+
+  try {
+    const customerId = await getOrCreateRazorpayCustomer(db, user);
+    const existingPending = subscription?.providerSubscriptionId && subscription?.status === 'pending' && subscription?.planId === plan.id;
+    const razorpaySubscription = existingPending
+      ? { id: subscription.providerSubscriptionId }
+      : await razorpayRequest('/subscriptions', {
+        method: 'POST',
+        body: JSON.stringify({
+          plan_id: razorpayPlanId,
+          total_count: 120,
+          quantity: 1,
+          customer_notify: 1,
+          customer_id: customerId,
+          notes: {
+            userId: user._id,
+            planId: plan.id,
+            app: 'komentra',
+          },
+        }),
+      });
+
+    await db.collection('users').updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          'subscription.planId': plan.id,
+          'subscription.status': 'pending',
+          'subscription.provider': 'razorpay',
+          'subscription.providerCustomerId': customerId,
+          'subscription.providerSubscriptionId': razorpaySubscription.id,
+          'subscription.lastPaymentStatus': 'pending',
+          'subscription.updatedAt': new Date(),
+        },
+      },
+    );
+
+    return json({
+      keyId: process.env.RAZORPAY_KEY_ID,
+      subscriptionId: razorpaySubscription.id,
+      plan: publicPlan(plan),
+      prefill: { name: user.username || '', email: user.email || '' },
+    });
+  } catch (e) {
+    console.error('[billing] checkout failed', e?.details || e);
+    return json({ error: e.message || 'Unable to start checkout right now. Please try again.' }, e.status || 500);
+  }
+}
+
+async function handleBillingSubscriptionAction(req) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const body = await req.json();
+  const action = body.action;
+  const db = await getDb();
+  const { user, subscription, planId } = await getUserEntitlements(db, u.userId);
+  if (!user) return json({ error: 'User not found' }, 404);
+
+  const subscriptionId = subscription?.providerSubscriptionId;
+  if (!subscriptionId) {
+    return json({ error: 'No Razorpay subscription is connected to this account yet.' }, 400);
+  }
+
+  const activeStatuses = new Set(['active', 'authenticated']);
+  const currentStatus = String(subscription.status || '').toLowerCase();
+  if (!activeStatuses.has(currentStatus)) {
+    return json({ error: 'Only active subscriptions can be changed from Komentra.' }, 400);
+  }
+
+  if (action === 'cancel') {
+    try {
+      const cancelled = await razorpayRequest(`/subscriptions/${subscriptionId}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ cancel_at_cycle_end: true }),
+      });
+      await db.collection('users').updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            'subscription.status': cancelled.status || subscription.status,
+            'subscription.cancelAtPeriodEnd': true,
+            'subscription.scheduledPlanId': 'free',
+            'subscription.scheduledPlanAt': subscription.currentPeriodEnd || razorpayTimestamp(cancelled.current_end || cancelled.end_at),
+            'subscription.currentPeriodEnd': subscription.currentPeriodEnd || razorpayTimestamp(cancelled.current_end || cancelled.end_at),
+            'subscription.updatedAt': new Date(),
+          },
+        },
+      );
+      return json({ ok: true, message: 'Your subscription is scheduled to end after the current billing period.' });
+    } catch (e) {
+      console.error('[billing] cancel failed', e?.details || e);
+      return json({ error: e.message || 'Unable to schedule cancellation right now.' }, e.status || 500);
+    }
+  }
+
+  if (action === 'change_plan') {
+    const nextPlan = getPlan(body.planId);
+    if (!isPaidPlan(nextPlan.id)) return json({ error: 'Use cancellation to move to Free at period end.' }, 400);
+    if (nextPlan.id === planId) return json({ error: 'You are already on this plan.' }, 400);
+    const nextRazorpayPlanId = configuredRazorpayPlanId(nextPlan.id);
+    if (!nextRazorpayPlanId) {
+      return json({ error: `${nextPlan.name} payments are not configured yet. Please contact support.` }, 503);
+    }
+
+    try {
+      const updated = await razorpayRequest(`/subscriptions/${subscriptionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          plan_id: nextRazorpayPlanId,
+          quantity: 1,
+          schedule_change_at: 'cycle_end',
+          customer_notify: true,
+          notes: {
+            ...(subscription.notes || {}),
+            userId: user._id,
+            planId: nextPlan.id,
+            app: 'komentra',
+          },
+        }),
+      });
+      await db.collection('users').updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            'subscription.scheduledPlanId': nextPlan.id,
+            'subscription.scheduledPlanAt': subscription.currentPeriodEnd || razorpayTimestamp(updated.current_end),
+            'subscription.cancelAtPeriodEnd': false,
+            'subscription.updatedAt': new Date(),
+          },
+        },
+      );
+      return json({ ok: true, message: `${nextPlan.name} is scheduled for your next billing cycle.` });
+    } catch (e) {
+      console.error('[billing] plan change failed', e?.details || e);
+      return json({ error: e.message || 'Unable to schedule the plan change right now.' }, e.status || 500);
+    }
+  }
+
+  return json({ error: 'Unknown billing action.' }, 400);
+}
+
+function verifyRazorpayWebhook(rawBody, signature) {
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  if (!secret || !signature) return false;
+  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  if (Buffer.byteLength(expected) !== Buffer.byteLength(signature)) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+
+function extractRazorpaySubscription(payload) {
+  return payload?.payload?.subscription?.entity || null;
+}
+
+function extractRazorpayPayment(payload) {
+  return payload?.payload?.payment?.entity || null;
+}
+
+async function applyRazorpaySubscriptionEvent(db, payload) {
+  const event = payload.event;
+  const subscription = extractRazorpaySubscription(payload);
+  const payment = extractRazorpayPayment(payload);
+  const subscriptionId = subscription?.id || payment?.subscription_id;
+  const userId = subscription?.notes?.userId || payment?.notes?.userId;
+  const planId = appPlanIdFromRazorpayPlanId(subscription?.plan_id) || subscription?.notes?.planId || payment?.notes?.planId;
+  if (!subscriptionId && !userId) return;
+
+  const set = {
+    'subscription.provider': 'razorpay',
+    'subscription.updatedAt': new Date(),
+  };
+  if (subscriptionId) set['subscription.providerSubscriptionId'] = subscriptionId;
+  if (subscription?.customer_id) set['subscription.providerCustomerId'] = subscription.customer_id;
+  if (payment?.status) set['subscription.lastPaymentStatus'] = payment.status;
+
+  if (subscription) {
+    set['subscription.status'] = subscription.status || 'pending';
+    set['subscription.currentPeriodStart'] = razorpayTimestamp(subscription.current_start);
+    set['subscription.currentPeriodEnd'] = razorpayTimestamp(subscription.current_end || subscription.end_at);
+    set['subscription.cancelAtPeriodEnd'] = !!subscription.cancel_at_cycle_end;
+    if (subscription.has_scheduled_changes) {
+      set['subscription.scheduledPlanAt'] = subscription.change_scheduled_at || subscription.current_end
+        ? razorpayTimestamp(subscription.change_scheduled_at || subscription.current_end)
+        : null;
+    } else {
+      set['subscription.scheduledPlanId'] = null;
+      set['subscription.scheduledPlanAt'] = null;
+    }
+  }
+
+  if (event === 'subscription.authenticated' || event === 'subscription.activated' || event === 'subscription.charged') {
+    if (planId) set['subscription.planId'] = planId;
+    set['subscription.status'] = subscription?.status || 'active';
+    set['subscription.lastPaymentStatus'] = payment?.status || 'paid';
+  } else if (event === 'subscription.cancelled') {
+    set['subscription.status'] = 'cancelled';
+    set['subscription.cancelAtPeriodEnd'] = !!subscription?.cancel_at_cycle_end;
+    if (!subscription?.cancel_at_cycle_end) set['subscription.planId'] = 'free';
+    set['subscription.scheduledPlanId'] = null;
+    set['subscription.scheduledPlanAt'] = null;
+  } else if (event === 'subscription.updated') {
+    if (planId && !subscription?.has_scheduled_changes) set['subscription.planId'] = planId;
+    if (!subscription?.has_scheduled_changes) {
+      set['subscription.scheduledPlanId'] = null;
+      set['subscription.scheduledPlanAt'] = null;
+    }
+  } else if (event === 'subscription.completed' || event === 'subscription.expired') {
+    set['subscription.status'] = 'expired';
+    set['subscription.planId'] = 'free';
+    set['subscription.cancelAtPeriodEnd'] = false;
+  } else if (event === 'payment.failed') {
+    set['subscription.lastPaymentStatus'] = 'failed';
+  }
+
+  const query = userId ? { _id: userId } : { 'subscription.providerSubscriptionId': subscriptionId };
+  await db.collection('users').updateOne(query, { $set: set });
+}
+
+async function handleBillingWebhook(req) {
+  const rawBody = await req.text();
+  const signature = req.headers.get('x-razorpay-signature');
+  if (!verifyRazorpayWebhook(rawBody, signature)) {
+    return json({ error: 'Invalid signature' }, 401);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return json({ error: 'Invalid webhook body' }, 400);
+  }
+
+  const db = await getDb();
+  await ensureEntitlementIndexes(db);
+  const eventId = req.headers.get('x-razorpay-event-id') || crypto.createHash('sha256').update(rawBody).digest('hex');
+  try {
+    await db.collection('billing_events').insertOne({
+      _id: eventId,
+      eventId,
+      event: payload.event || null,
+      receivedAt: new Date(),
+      payload,
+    });
+  } catch (e) {
+    if (e?.code === 11000) return json({ ok: true, duplicate: true });
+    throw e;
+  }
+
+  await applyRazorpaySubscriptionEvent(db, payload);
+  return json({ ok: true });
 }
 
 // ----------- DISPATCHER -----------
@@ -1487,6 +1882,12 @@ if (path === '/auth/me' && method === 'GET') return handleMe(req);
 
   // Analytics
   if (path === '/analytics' && method === 'GET') return handleAnalytics(req);
+
+  // Billing
+  if (path === '/billing/status' && method === 'GET') return handleBillingStatus(req);
+  if (path === '/billing/checkout' && method === 'POST') return handleBillingCheckout(req);
+  if (path === '/billing/subscription' && method === 'POST') return handleBillingSubscriptionAction(req);
+  if (path === '/billing/webhook' && method === 'POST') return handleBillingWebhook(req);
 
   // Instagram
   if (path === '/instagram/connect' && method === 'GET') return handleConnect(req);

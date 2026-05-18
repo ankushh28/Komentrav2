@@ -23,7 +23,7 @@ import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
-  Pencil, Settings, Briefcase, Users, Menu, LifeBuoy,
+  Pencil, Settings, Briefcase, Users, Menu, LifeBuoy, CreditCard,
 } from 'lucide-react';
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
@@ -112,7 +112,7 @@ function AutomationTypeDialog({ open, onOpenChange, onSelect }) {
   );
 }
 
-function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated }) {
+function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated, onBillingBlocked }) {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [media, setMedia] = useState([]);
   const [loadingMedia, setLoadingMedia] = useState(false);
@@ -179,11 +179,16 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
+      if (!res.ok) {
+        if (data.billing) onBillingBlocked?.(data);
+        const error = new Error(data.error || 'Failed');
+        error.billing = !!data.billing;
+        throw error;
+      }
       toast.success('Automation created! 🚀');
       onCreated(data.automation);
       onOpenChange(false);
-    } catch (e) { toast.error(e.message); }
+    } catch (e) { if (!e.billing) toast.error(e.message); }
     finally { setSaving(false); }
   };
 
@@ -363,7 +368,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
   );
 }
 
-function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated }) {
+function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated, onBillingBlocked }) {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [name, setName] = useState('');
   const [keywords, setKeywords] = useState([]);
@@ -407,11 +412,16 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
+      if (!res.ok) {
+        if (data.billing) onBillingBlocked?.(data);
+        const error = new Error(data.error || 'Failed');
+        error.billing = !!data.billing;
+        throw error;
+      }
       toast.success('DM auto-reply created! 🚀');
       onCreated(data.automation);
       onOpenChange(false);
-    } catch (e) { toast.error(e.message); } finally { setSaving(false); }
+    } catch (e) { if (!e.billing) toast.error(e.message); } finally { setSaving(false); }
   };
 
   return (
@@ -531,7 +541,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
   );
 }
 
-function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpenChange, onSaved }) {
+function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpenChange, onSaved, onBillingBlocked }) {
   const open = !!automation;
   const isDmReply = automation?.type === 'dm_reply';
   const [selectedAccount, setSelectedAccount] = useState('');
@@ -625,12 +635,17 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update automation');
+      if (!res.ok) {
+        if (data.billing) onBillingBlocked?.(data);
+        const error = new Error(data.error || 'Failed to update automation');
+        error.billing = !!data.billing;
+        throw error;
+      }
       toast.success('Automation updated');
       onSaved(data.automation);
       onOpenChange(false);
     } catch (e) {
-      toast.error(e.message);
+      if (!e.billing) toast.error(e.message);
     } finally {
       setSaving(false);
     }
@@ -918,6 +933,7 @@ export default function DashboardPage() {
   const [editingAutomation, setEditingAutomation] = useState(null);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [billingStatus, setBillingStatus] = useState(null);
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -964,8 +980,27 @@ export default function DashboardPage() {
     } catch { toast.error('Failed to load data'); }
   }, [token, selectedWorkspaceId]);
 
+  const loadBillingStatus = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/billing/status', { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (res.ok) setBillingStatus(data);
+    } catch {}
+  }, [token]);
+
+  const showBillingBlocked = useCallback((data) => {
+    toast.error(data.error || 'Your current plan limit was reached.', {
+      action: {
+        label: 'View plans',
+        onClick: () => router.push('/billing'),
+      },
+    });
+  }, [router]);
+
   useEffect(() => { if (token) loadWorkspaces(); }, [loadWorkspaces, token]);
   useEffect(() => { if (token && selectedWorkspaceId) refresh(); }, [refresh, token, selectedWorkspaceId]);
+  useEffect(() => { if (token) loadBillingStatus(); }, [loadBillingStatus, token]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -990,9 +1025,14 @@ export default function DashboardPage() {
     try {
       const res = await fetch('/api/instagram/connect', { headers: scopedHeaders(token, selectedWorkspaceId) });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) {
+        if (data.billing) showBillingBlocked(data);
+        const error = new Error(data.error);
+        error.billing = !!data.billing;
+        throw error;
+      }
       window.location.href = data.url;
-    } catch (e) { toast.error(e.message); setConnecting(false); }
+    } catch (e) { if (!e.billing) toast.error(e.message); setConnecting(false); }
   };
 
   const toggle = async (a) => {
@@ -1000,7 +1040,12 @@ export default function DashboardPage() {
       method: 'PUT', headers: scopedHeaders(token, selectedWorkspaceId, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({ isActive: !a.isActive }),
     });
-    if (res.ok) { toast.success(`Automation ${!a.isActive ? 'enabled' : 'disabled'}`); refresh(); }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { toast.success(`Automation ${!a.isActive ? 'enabled' : 'disabled'}`); refresh(); loadBillingStatus(); }
+    else {
+      if (data.billing) showBillingBlocked(data);
+      toast.error(data.error || 'Failed to update automation');
+    }
   };
   const remove = async (id) => {
     if (!confirm('Delete this automation?')) return;
@@ -1010,7 +1055,7 @@ export default function DashboardPage() {
   const disconnectAccount = async (id) => {
     if (!confirm('Disconnect this Instagram account? All linked automations will be removed.')) return;
     const res = await fetch(`/api/instagram/accounts/${id}`, { method: 'DELETE', headers: scopedHeaders(token, selectedWorkspaceId) });
-    if (res.ok) { toast.success('Disconnected'); await loadWorkspaces(selectedWorkspaceId); refresh(); }
+    if (res.ok) { toast.success('Disconnected'); await loadWorkspaces(selectedWorkspaceId); refresh(); loadBillingStatus(); }
   };
 
   const selectWorkspace = (id) => {
@@ -1027,9 +1072,10 @@ export default function DashboardPage() {
       body: JSON.stringify({ name }),
     });
     const data = await res.json();
-    if (!res.ok) { toast.error(data.error || 'Failed to create workspace'); return; }
+    if (!res.ok) { if (data.billing) showBillingBlocked(data); else toast.error(data.error || 'Failed to create workspace'); return; }
     toast.success('Workspace created');
     await loadWorkspaces(data.workspace.id);
+    loadBillingStatus();
   };
 
   const renameWorkspace = async (name) => {
@@ -1071,12 +1117,14 @@ export default function DashboardPage() {
     setShowWorkspaceSettings(false);
     setSelectedWorkspaceId('');
     await loadWorkspaces('');
+    loadBillingStatus();
   };
 
   if (!token || !user) return null;
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId);
   const workspaceActive = (selectedWorkspace?.status || 'active') === 'active';
   const activeCount = automations.filter(a => a.isActive).length;
+  const selectedUsage = billingStatus?.usage?.workspacesBreakdown?.find(w => w.id === selectedWorkspaceId);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1107,12 +1155,16 @@ export default function DashboardPage() {
             <div className="hidden md:flex items-center gap-2 text-sm">
               <div className={`w-2 h-2 rounded-full ${workspaceActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></div>
               <span className="text-muted-foreground">{workspaceActive ? `${activeCount} active` : 'disabled'}</span>
+              {billingStatus?.plan && <Badge variant="outline" className="ml-1">{billingStatus.plan.name}</Badge>}
             </div>
             <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => router.push('/analytics')}>
               <BarChart3 className="w-4 h-4 mr-1" /> Analytics
             </Button>
             <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => router.push('/audience')}>
               <Users className="w-4 h-4 mr-1" /> Audience
+            </Button>
+            <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => router.push('/billing')}>
+              <CreditCard className="w-4 h-4 mr-1" /> Billing
             </Button>
             <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => router.push(`/contact?source=dashboard&workspaceId=${selectedWorkspaceId || ''}`)}>
               <LifeBuoy className="w-4 h-4 mr-1" /> Support
@@ -1133,6 +1185,9 @@ export default function DashboardPage() {
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push('/audience')}>
                   <Users className="w-4 h-4 mr-2" /> Audience
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push('/billing')}>
+                  <CreditCard className="w-4 h-4 mr-2" /> Billing
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push(`/contact?source=dashboard&workspaceId=${selectedWorkspaceId || ''}`)}>
                   <LifeBuoy className="w-4 h-4 mr-2" /> Support
@@ -1178,6 +1233,49 @@ export default function DashboardPage() {
               </div>
             </div>
             {!workspaceActive && <Badge className="bg-slate-100 text-slate-600">Disabled</Badge>}
+          </div>
+        )}
+        {billingStatus?.plan && selectedUsage && (
+          <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="font-semibold">{billingStatus.plan.name} plan</p>
+                <p className="text-xs text-muted-foreground">Monthly usage for this workspace</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => router.push('/billing')}>
+                <CreditCard className="w-4 h-4 mr-1" /> Manage plan
+              </Button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <div className="mb-1 flex justify-between text-xs text-muted-foreground">
+                  <span>Active automations</span>
+                  <span>{selectedUsage.activeAutomations} / {selectedUsage.activeAutomationsLimit}</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-full bg-slate-950" style={{ width: `${Math.min(100, Math.round((selectedUsage.activeAutomations / Math.max(selectedUsage.activeAutomationsLimit, 1)) * 100))}%` }} />
+                </div>
+              </div>
+              <div>
+                <div className="mb-1 flex justify-between text-xs text-muted-foreground">
+                  <span>Triggers this month</span>
+                  <span>{selectedUsage.triggersUsed.toLocaleString('en-IN')} / {selectedUsage.triggerLimit.toLocaleString('en-IN')}</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-full bg-slate-950" style={{ width: `${Math.min(100, Math.round((selectedUsage.triggersUsed / Math.max(selectedUsage.triggerLimit, 1)) * 100))}%` }} />
+                </div>
+              </div>
+            </div>
+            {(selectedUsage.triggerUsagePercent >= 80 || selectedUsage.activeAutomations >= selectedUsage.activeAutomationsLimit) && (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                {selectedUsage.activeAutomations >= selectedUsage.activeAutomationsLimit
+                  ? 'This workspace is at its active automation limit. Upgrade or turn off an automation before adding more.'
+                  : 'This workspace has used more than 80% of its monthly trigger limit.'}
+                <Button variant="link" className="ml-1 h-auto p-0 text-amber-900 underline" onClick={() => router.push('/billing')}>
+                  View plans
+                </Button>
+              </div>
+            )}
           </div>
         )}
         <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mb-10">
@@ -1284,9 +1382,9 @@ export default function DashboardPage() {
           else setShowCreate(true);
         }}
       />
-      <CreateAutomationDialog open={showCreate} onOpenChange={setShowCreate} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => refresh()} />
-      <CreateDmReplyDialog open={showCreateDmReply} onOpenChange={setShowCreateDmReply} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => refresh()} />
-      <EditAutomationDialog automation={editingAutomation} onOpenChange={() => setEditingAutomation(null)} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onSaved={() => refresh()} />
+      <CreateAutomationDialog open={showCreate} onOpenChange={setShowCreate} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} />
+      <CreateDmReplyDialog open={showCreateDmReply} onOpenChange={setShowCreateDmReply} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} />
+      <EditAutomationDialog automation={editingAutomation} onOpenChange={() => setEditingAutomation(null)} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onSaved={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} />
       <WorkspaceSettingsDialog
         open={showWorkspaceSettings}
         onOpenChange={setShowWorkspaceSettings}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -87,9 +88,21 @@ export default function AudiencePage() {
 
   const exportCsv = () => {
     if (!token || !selectedWorkspaceId) return;
-    window.location.href = `/api/audience/export?workspaceId=${encodeURIComponent(selectedWorkspaceId)}`;
     fetch('/api/audience/export', { headers: scopedHeaders(token, selectedWorkspaceId) })
       .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data.billing) {
+            toast.error(data.error || 'Upgrade to export audience.', {
+              action: {
+                label: 'View plans',
+                onClick: () => router.push('/billing'),
+              },
+            });
+            return;
+          }
+          throw new Error(data.error || 'Unable to export audience');
+        }
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -99,7 +112,8 @@ export default function AudiencePage() {
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-      });
+      })
+      .catch((e) => toast.error(e.message));
   };
 
   if (!token) return null;

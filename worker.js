@@ -12,6 +12,7 @@ import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { MongoClient } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
+import { tryConsumeTriggerQuota } from './lib/entitlements.js';
 
 // Lightweight .env loader (avoids extra dep)
 try {
@@ -331,6 +332,55 @@ async function markDeliveryFailed(dbi, key, error) {
     status: 'send_failed',
     sendError: serializeError(error),
   });
+}
+
+async function markDeliveryPlanLimited(dbi, key, quota) {
+  await updateAutomationDelivery(dbi, key, {
+    status: 'plan_limited',
+    planLimit: quota?.details?.billing || null,
+  });
+}
+
+async function consumeTriggerOrRecordLimit(dbi, {
+  auto,
+  acct,
+  deliveryKey,
+  flow,
+  sourceEventId,
+  jobId,
+  commentText = null,
+  fromUserId = null,
+  fromUsername = null,
+}) {
+  const workspaceId = auto.workspaceId || acct.workspaceId || null;
+  if (!auto.userId || !workspaceId) return { ok: true };
+  const quota = await tryConsumeTriggerQuota(dbi, auto.userId, workspaceId);
+  if (quota.ok) return quota;
+
+  await markDeliveryPlanLimited(dbi, deliveryKey, quota);
+  await dbi.collection('automation_runs').insertOne({
+    _id: uuidv4(),
+    automationId: auto._id,
+    userId: auto.userId,
+    workspaceId,
+    instagramAccountId: auto.instagramAccountId || acct._id,
+    commentText,
+    fromUserId,
+    fromUsername,
+    flow: 'plan-limit',
+    originalFlow: flow,
+    sourceEventId,
+    planLimit: quota.details?.billing || null,
+    ranAt: new Date(),
+  });
+  logAutomation(flow, 'skipped by subscription trigger limit', {
+    jobId,
+    automationId: auto._id,
+    workspaceId,
+    current: quota.details?.billing?.current || null,
+    limit: quota.details?.billing?.limit || null,
+  });
+  return quota;
 }
 
 async function claimCooldown(dbi, {
@@ -713,6 +763,18 @@ async function processJob(job) {
           });
           continue;
         }
+        const quota = await consumeTriggerOrRecordLimit(dbi, {
+          auto,
+          acct,
+          deliveryKey,
+          flow: auto.askToFollow ? 'follow-gated' : 'direct',
+          sourceEventId: commentId,
+          jobId: job.id,
+          commentText: v.text,
+          fromUserId: fromId,
+          fromUsername,
+        });
+        if (!quota.ok) break;
         const canSend = await assertCanSendForAccount(dbi, acct, 'comment-dm', {
           jobId: job.id,
           automationId: auto._id,
@@ -931,6 +993,16 @@ async function processJob(job) {
             });
             continue;
           }
+          const quota = await consumeTriggerOrRecordLimit(dbi, {
+            auto,
+            acct,
+            deliveryKey,
+            flow: 'follow-not-verified',
+            sourceEventId,
+            jobId: job.id,
+            fromUserId: senderId,
+          });
+          if (!quota.ok) continue;
           let retry = null;
           try {
           retry = await sendFollowPrompt(
@@ -1022,6 +1094,16 @@ async function processJob(job) {
           });
           continue;
         }
+        const quota = await consumeTriggerOrRecordLimit(dbi, {
+          auto,
+          acct,
+          deliveryKey,
+          flow: 'follow-confirmed',
+          sourceEventId,
+          jobId: job.id,
+          fromUserId: senderId,
+        });
+        if (!quota.ok) continue;
         let rDM = null;
         try {
         rDM = buttons.length > 0
@@ -1192,6 +1274,17 @@ async function processJob(job) {
             });
             break;
           }
+          const quota = await consumeTriggerOrRecordLimit(dbi, {
+            auto,
+            acct,
+            deliveryKey,
+            flow: 'dm-reply',
+            sourceEventId,
+            jobId: job.id,
+            commentText: incomingText,
+            fromUserId: senderId,
+          });
+          if (!quota.ok) break;
 
           let r = null;
           try {

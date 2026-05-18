@@ -12,6 +12,7 @@ import {
   Users,
   Workflow,
   Zap,
+  CreditCard,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PublicFooter } from '@/components/public-footer';
@@ -86,6 +87,42 @@ const useCases = [
   'Track which keywords and posts create the most replies.',
 ];
 
+const pricingPlans = [
+  {
+    name: 'Free',
+    price: '₹0',
+    note: 'Free forever',
+    cta: 'Start free',
+    href: '/auth?mode=signup',
+    features: ['1 workspace/account', '10 active automations', '1,200 triggers/month', '7-day analytics'],
+  },
+  {
+    name: 'Creator',
+    price: '₹349',
+    note: 'per month',
+    cta: 'Choose Creator',
+    href: '/auth?mode=signup&plan=creator',
+    featured: true,
+    features: ['1 workspace/account', '20 active automations', '2,000 triggers/month', '30-day analytics', 'Audience export'],
+  },
+  {
+    name: 'Growth',
+    price: '₹999',
+    note: 'per month',
+    cta: 'Choose Growth',
+    href: '/auth?mode=signup&plan=growth',
+    features: ['3 workspaces/accounts', '30 active automations each', '25,000 triggers/workspace', '90-day analytics'],
+  },
+  {
+    name: 'Agency',
+    price: '₹2,999',
+    note: 'per month',
+    cta: 'Choose Agency',
+    href: '/auth?mode=signup&plan=agency',
+    features: ['10 workspaces/accounts', '50 active automations each', '75,000 triggers/workspace', 'Priority support'],
+  },
+];
+
 const faqs = [
   {
     question: 'Who is Komentra for?',
@@ -142,6 +179,7 @@ export default function Home() {
           <nav className="hidden items-center gap-6 text-sm font-medium text-slate-600 md:flex">
             <Link href="#features" className="hover:text-slate-950">Features</Link>
             <Link href="#how-it-works" className="hover:text-slate-950">How it works</Link>
+            <Link href="#pricing" className="hover:text-slate-950">Pricing</Link>
             <Link href="#faq" className="hover:text-slate-950">FAQ</Link>
             <Link href="/contact" className="hover:text-slate-950">Contact</Link>
           </nav>
@@ -237,6 +275,48 @@ export default function Home() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="pricing" className="border-y border-slate-200 bg-slate-50">
+        <div className="container mx-auto px-4 py-20">
+          <div className="max-w-2xl">
+            <p className="text-sm font-semibold uppercase tracking-wide text-sky-700">Pricing</p>
+            <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Simple plans that do not punish early creators.</h2>
+            <p className="mt-4 text-slate-600">
+              Start free, then upgrade only when your automations and monthly triggers need more room.
+            </p>
+          </div>
+          <div className="mt-10 grid gap-4 lg:grid-cols-4">
+            {pricingPlans.map((plan) => (
+              <article key={plan.name} className={`rounded-lg border bg-white p-5 shadow-sm ${plan.featured ? 'border-slate-950 ring-2 ring-slate-950/10' : 'border-slate-200'}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold">{plan.name}</h3>
+                    <p className="mt-1 text-sm text-slate-500">{plan.note}</p>
+                  </div>
+                  {plan.featured && <span className="rounded-full bg-slate-950 px-2.5 py-1 text-xs font-medium text-white">Popular</span>}
+                </div>
+                <div className="mt-5 flex items-end gap-1">
+                  <span className="text-3xl font-semibold tracking-tight">{plan.price}</span>
+                  {plan.price !== '₹0' && <span className="pb-1 text-sm text-slate-500">/mo</span>}
+                </div>
+                <Button asChild className={`mt-5 w-full ${plan.featured ? 'bg-slate-950 hover:bg-slate-800' : ''}`} variant={plan.featured ? 'default' : 'outline'}>
+                  <Link href={plan.href}>
+                    <CreditCard className="mr-2 h-4 w-4" /> {plan.cta}
+                  </Link>
+                </Button>
+                <ul className="mt-5 space-y-3 text-sm text-slate-600">
+                  {plan.features.map((feature) => (
+                    <li key={feature} className="flex gap-2">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            ))}
           </div>
         </div>
       </section>

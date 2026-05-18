@@ -73,6 +73,7 @@ export default function AnalyticsPage() {
   if (!data) return null;
 
   const { summary, timeline, perAutomation, workspaceBreakdown = [], topKeywords, funnel, recentMatches } = data;
+  const lookbackDays = summary?.totals?.analyticsLookbackDays || 7;
   const selectWorkspace = (id) => {
     setSelectedWorkspaceId(id);
     localStorage.setItem('selectedWorkspaceId', id);
@@ -130,7 +131,7 @@ export default function AnalyticsPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatTile label="Workspaces" value={summary.totals.workspaces || workspaces.length} sublabel={`${summary.totals.activeWorkspaces || 0} active`} icon={Briefcase} />
           <StatTile label="Active Automations" value={summary.totals.activeAutomations} sublabel={`of ${summary.totals.automations} total`} icon={Zap} />
-          <StatTile label="Triggers Fired" value={summary.totals.totalTriggers} sublabel={`${summary.runsLast7Days} this week`} icon={TrendingUp} />
+          <StatTile label="Triggers Fired" value={summary.totals.totalTriggers} sublabel={`${summary.runsInLookback || summary.runsLast7Days || 0} in ${lookbackDays} days`} icon={TrendingUp} />
           <StatTile label="DMs Sent" value={summary.totals.totalDMs} sublabel={summary.totals.followConvRate !== null ? `${summary.totals.followConvRate}% follow conv.` : ''} icon={Send} />
         </div>
 
@@ -162,7 +163,7 @@ export default function AnalyticsPage() {
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-4 h-4 text-slate-700" /> Last 7 days — Triggers fired</h2>
+              <h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-4 h-4 text-slate-700" /> Last {lookbackDays} days — Triggers fired</h2>
             </div>
             <div style={{ width: '100%', height: 240 }}>
               <ResponsiveContainer>
