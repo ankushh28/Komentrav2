@@ -13,6 +13,7 @@ const initialForm = {
   name: '',
   email: '',
   company: '',
+  workspaceId: '',
   instagram: '',
   topic: 'support',
   message: '',
@@ -22,23 +23,61 @@ const initialForm = {
 export function ContactForm() {
   const params = useSearchParams();
   const [form, setForm] = useState(initialForm);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
 
   useEffect(() => {
+    const source = params.get('source');
+    const topic = params.get('topic');
+    const allowedTopic = ['general', 'support', 'privacy', 'billing', 'partnership'].includes(topic) ? topic : '';
+
     try {
+      const token = localStorage.getItem('token');
       const user = JSON.parse(localStorage.getItem('user') || '{}');
-      const workspaceId = localStorage.getItem('selectedWorkspaceId') || params.get('workspaceId') || '';
-      const source = params.get('source');
-      const topic = params.get('topic');
-      const allowedTopic = ['general', 'support', 'privacy', 'billing', 'partnership'].includes(topic) ? topic : '';
+
+      if (!token || !user?.email) {
+        setIsLoggedIn(false);
+        setWorkspaces([]);
+        setForm((current) => ({
+          ...current,
+          topic: allowedTopic || current.topic,
+        }));
+        return;
+      }
+
+      setIsLoggedIn(true);
       setForm((current) => ({
         ...current,
         name: current.name || user.username || '',
         email: current.email || user.email || '',
-        company: current.company || (workspaceId ? `Workspace ${workspaceId}` : ''),
         topic: allowedTopic || (source === 'app' || source === 'dashboard' ? 'support' : current.topic),
       }));
+
+      const preferredWorkspaceId = params.get('workspaceId') || localStorage.getItem('selectedWorkspaceId') || '';
+      setLoadingWorkspaces(true);
+      fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } })
+        .then((res) => res.ok ? res.json() : Promise.reject(new Error('Unable to load workspaces')))
+        .then((data) => {
+          const list = data.workspaces || [];
+          setWorkspaces(list);
+          const selected =
+            list.find((workspace) => workspace.id === preferredWorkspaceId) ||
+            list.find((workspace) => workspace.status === 'active') ||
+            list[0];
+
+          if (selected) {
+            setForm((current) => ({
+              ...current,
+              workspaceId: selected.id,
+              company: selected.name,
+            }));
+          }
+        })
+        .catch(() => setWorkspaces([]))
+        .finally(() => setLoadingWorkspaces(false));
     } catch {}
   }, [params]);
 
@@ -60,7 +99,14 @@ export function ContactForm() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Unable to send your message right now.');
       setStatus('sent');
-      setForm((current) => ({ ...initialForm, name: current.name, email: current.email }));
+      setForm((current) => ({
+        ...initialForm,
+        name: current.name,
+        email: current.email,
+        company: isLoggedIn ? current.company : '',
+        workspaceId: isLoggedIn ? current.workspaceId : '',
+        topic: current.topic,
+      }));
     } catch (err) {
       setError(err.message);
       setStatus('error');
@@ -83,10 +129,42 @@ export function ContactForm() {
           <Label htmlFor="email">Email</Label>
           <Input id="email" type="email" value={form.email} onChange={(e) => update('email', e.target.value)} placeholder="you@brand.com" required />
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="company">Company or brand</Label>
-          <Input id="company" value={form.company} onChange={(e) => update('company', e.target.value)} placeholder="Brand or agency name" />
-        </div>
+        {isLoggedIn ? (
+          <div className="space-y-2">
+            <Label>Workspace</Label>
+            {workspaces.length > 0 ? (
+              <Select
+                value={form.workspaceId}
+                onValueChange={(value) => {
+                  const workspace = workspaces.find((item) => item.id === value);
+                  setForm((current) => ({
+                    ...current,
+                    workspaceId: value,
+                    company: workspace?.name || '',
+                  }));
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={loadingWorkspaces ? 'Loading workspaces...' : 'Select workspace'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {workspaces.map((workspace) => (
+                    <SelectItem key={workspace.id} value={workspace.id}>
+                      {workspace.name}{workspace.status === 'disabled' ? ' (disabled)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input value={loadingWorkspaces ? 'Loading workspaces...' : 'No workspace found'} disabled />
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <Label htmlFor="company">Company or brand</Label>
+            <Input id="company" value={form.company} onChange={(e) => update('company', e.target.value)} placeholder="Brand or agency name" />
+          </div>
+        )}
         <div className="space-y-2">
           <Label htmlFor="instagram">Instagram handle</Label>
           <Input id="instagram" value={form.instagram} onChange={(e) => update('instagram', e.target.value)} placeholder="@yourbrand" />

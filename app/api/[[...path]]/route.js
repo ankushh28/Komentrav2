@@ -1541,6 +1541,7 @@ async function handleContact(req) {
     name: cleanText(payload.name, 120),
     email: cleanText(payload.email, 200).toLowerCase(),
     company: cleanText(payload.company, 160),
+    workspaceId: cleanText(payload.workspaceId, 120),
     instagram: cleanText(payload.instagram, 80),
     topic: cleanText(payload.topic || 'general', 40).toLowerCase(),
     message: cleanText(payload.message, 4000),
