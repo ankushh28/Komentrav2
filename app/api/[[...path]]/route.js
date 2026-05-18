@@ -1244,7 +1244,7 @@ function summarizeWebhook(body) {
 }
 
 function stableWebhookJobId(rawBody) {
-  return 'webhook:' + crypto
+  return 'webhook-' + crypto
     .createHash('sha256')
     .update(rawBody, 'utf8')
     .digest('hex')
