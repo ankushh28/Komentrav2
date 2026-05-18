@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -15,16 +16,16 @@ import {
   BarChart, Bar,
 } from 'recharts';
 
-function StatTile({ label, value, sublabel, gradient, icon: Icon }) {
+function StatTile({ label, value, sublabel, icon: Icon }) {
   return (
-    <Card className={`border-0 shadow-md text-white ${gradient}`}>
+    <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
       <CardContent className="p-5">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-xs opacity-80">{label}</p>
-          {Icon && <Icon className="w-4 h-4 opacity-80" />}
+          <p className="text-xs text-slate-500">{label}</p>
+          {Icon && <Icon className="w-4 h-4 text-slate-500" />}
         </div>
         <p className="text-3xl font-bold">{value}</p>
-        {sublabel && <p className="text-xs opacity-80 mt-1">{sublabel}</p>}
+        {sublabel && <p className="text-xs text-slate-500 mt-1">{sublabel}</p>}
       </CardContent>
     </Card>
   );
@@ -34,7 +35,7 @@ function FlowBadge({ flow }) {
   const map = {
     direct: { label: 'Direct DM', cls: 'bg-emerald-100 text-emerald-700' },
     'follow-gated': { label: 'Follow-prompt', cls: 'bg-amber-100 text-amber-700' },
-    'follow-confirmed': { label: 'Follow ✓ → DM', cls: 'bg-violet-100 text-violet-700' },
+    'follow-confirmed': { label: 'Follow ✓ → DM', cls: 'bg-slate-100 text-slate-700' },
     'follow-not-verified': { label: 'Follow not verified', cls: 'bg-rose-100 text-rose-700' },
   };
   const { label, cls } = map[flow] || { label: flow, cls: 'bg-slate-100 text-slate-700' };
@@ -67,7 +68,7 @@ export default function AnalyticsPage() {
   }, [router]);
 
   if (loading) {
-    return <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-violet-50/40"><Activity className="w-8 h-8 animate-pulse text-violet-500" /></div>;
+    return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Activity className="w-8 h-8 animate-pulse text-slate-700" /></div>;
   }
   if (!data) return null;
 
@@ -78,15 +79,15 @@ export default function AnalyticsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/40">
-      <header className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-20">
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white/90 backdrop-blur sticky top-0 z-20">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
               <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>
             <div className="flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-violet-600" />
+              <BarChart3 className="w-5 h-5 text-slate-700" />
               <h1 className="text-xl font-bold">Analytics</h1>
             </div>
           </div>
@@ -127,15 +128,15 @@ export default function AnalyticsPage() {
         </div>
         {/* Top stat tiles */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatTile label="Workspaces" value={summary.totals.workspaces || workspaces.length} sublabel={`${summary.totals.activeWorkspaces || 0} active`} gradient="bg-gradient-to-br from-indigo-500 to-violet-600" icon={Briefcase} />
-          <StatTile label="Active Automations" value={summary.totals.activeAutomations} sublabel={`of ${summary.totals.automations} total`} gradient="bg-gradient-to-br from-violet-500 to-fuchsia-500" icon={Zap} />
-          <StatTile label="Triggers Fired" value={summary.totals.totalTriggers} sublabel={`${summary.runsLast7Days} this week`} gradient="bg-gradient-to-br from-emerald-500 to-teal-500" icon={TrendingUp} />
-          <StatTile label="DMs Sent" value={summary.totals.totalDMs} sublabel={summary.totals.followConvRate !== null ? `${summary.totals.followConvRate}% follow conv.` : ''} gradient="bg-gradient-to-br from-rose-500 to-orange-500" icon={Send} />
+          <StatTile label="Workspaces" value={summary.totals.workspaces || workspaces.length} sublabel={`${summary.totals.activeWorkspaces || 0} active`} icon={Briefcase} />
+          <StatTile label="Active Automations" value={summary.totals.activeAutomations} sublabel={`of ${summary.totals.automations} total`} icon={Zap} />
+          <StatTile label="Triggers Fired" value={summary.totals.totalTriggers} sublabel={`${summary.runsLast7Days} this week`} icon={TrendingUp} />
+          <StatTile label="DMs Sent" value={summary.totals.totalDMs} sublabel={summary.totals.followConvRate !== null ? `${summary.totals.followConvRate}% follow conv.` : ''} icon={Send} />
         </div>
 
         <Card>
           <CardContent className="p-6">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Briefcase className="w-4 h-4 text-violet-600" /> Workspace Breakdown</h2>
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Briefcase className="w-4 h-4 text-slate-700" /> Workspace Breakdown</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {workspaceBreakdown.map(w => (
                 <div key={w.id} className="rounded-lg border bg-slate-50 p-4">
@@ -161,22 +162,22 @@ export default function AnalyticsPage() {
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-4 h-4 text-violet-600" /> Last 7 days — Triggers fired</h2>
+              <h2 className="text-lg font-semibold flex items-center gap-2"><TrendingUp className="w-4 h-4 text-slate-700" /> Last 7 days — Triggers fired</h2>
             </div>
             <div style={{ width: '100%', height: 240 }}>
               <ResponsiveContainer>
                 <AreaChart data={timeline} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.6}/>
-                      <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0}/>
+                      <stop offset="0%" stopColor="#0f172a" stopOpacity={0.6}/>
+                      <stop offset="100%" stopColor="#0f172a" stopOpacity={0}/>
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="date" tickFormatter={(d) => d.slice(5)} stroke="#94a3b8" fontSize={12} />
                   <YAxis allowDecimals={false} stroke="#94a3b8" fontSize={12} />
                   <Tooltip />
-                  <Area type="monotone" dataKey="count" stroke="#8b5cf6" strokeWidth={2} fill="url(#grad)" />
+                  <Area type="monotone" dataKey="count" stroke="#0f172a" strokeWidth={2} fill="url(#grad)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -187,11 +188,11 @@ export default function AnalyticsPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
             <CardContent className="p-6">
-              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Activity className="w-4 h-4 text-violet-600" /> Engagement Funnel</h2>
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Activity className="w-4 h-4 text-slate-700" /> Engagement Funnel</h2>
               <div className="space-y-3">
                 {[
-                  { label: 'Triggers matched', value: funnel.triggers, icon: Zap, color: 'bg-violet-500' },
-                  { label: 'Public replies posted', value: funnel.replies, icon: MessageSquare, color: 'bg-fuchsia-500' },
+                  { label: 'Triggers matched', value: funnel.triggers, icon: Zap, color: 'bg-slate-500' },
+                  { label: 'Public replies posted', value: funnel.replies, icon: MessageSquare, color: 'bg-sky-600' },
                   { label: 'Follow-prompts sent', value: funnel.followGated, icon: UserCheck, color: 'bg-amber-500' },
                   { label: 'Followed & verified', value: funnel.followConfirmed, icon: ShieldCheck, color: 'bg-emerald-500' },
                   { label: 'DMs delivered', value: funnel.dmsSent, icon: Send, color: 'bg-rose-500' },
@@ -216,7 +217,7 @@ export default function AnalyticsPage() {
 
           <Card>
             <CardContent className="p-6">
-              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Hash className="w-4 h-4 text-violet-600" /> Top Trigger Keywords</h2>
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Hash className="w-4 h-4 text-slate-700" /> Top Trigger Keywords</h2>
               {topKeywords.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No matches yet — fire some automations to see data here.</p>
               ) : (
@@ -227,7 +228,7 @@ export default function AnalyticsPage() {
                       <XAxis type="number" allowDecimals={false} stroke="#94a3b8" fontSize={12} />
                       <YAxis type="category" dataKey="keyword" stroke="#94a3b8" fontSize={12} width={100} />
                       <Tooltip />
-                      <Bar dataKey="count" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
+                      <Bar dataKey="count" fill="#0f172a" radius={[0, 4, 4, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -269,7 +270,7 @@ export default function AnalyticsPage() {
                         </td>
                         <td className="py-3">
                           <div className="flex flex-wrap gap-1">
-                            {a.keywords.slice(0, 3).map(k => <Badge key={k} className="bg-violet-100 text-violet-700 text-[10px]">{k}</Badge>)}
+                            {a.keywords.slice(0, 3).map(k => <Badge key={k} className="bg-slate-100 text-slate-700 text-[10px]">{k}</Badge>)}
                           </div>
                         </td>
                         <td className="py-3 text-right font-semibold">{a.triggers}</td>
@@ -295,7 +296,7 @@ export default function AnalyticsPage() {
         {/* Recent Matches */}
         <Card>
           <CardContent className="p-6">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Clock className="w-4 h-4 text-violet-600" /> Recent Matched Comments (50)</h2>
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><Clock className="w-4 h-4 text-slate-700" /> Recent Matched Comments (50)</h2>
             {recentMatches.length === 0 ? (
               <p className="text-sm text-muted-foreground">No matches yet. Once a tester comments your trigger word, it'll show up here.</p>
             ) : (
@@ -308,7 +309,7 @@ export default function AnalyticsPage() {
                         <span className="text-xs text-muted-foreground">{r.automationName}</span>
                         <FlowBadge flow={r.flow} />
                         {r.replyOk && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Reply ✓</Badge>}
-                        {r.dmOk && <Badge className="bg-violet-100 text-violet-700 text-[10px]">DM ✓</Badge>}
+                        {r.dmOk && <Badge className="bg-slate-100 text-slate-700 text-[10px]">DM ✓</Badge>}
                       </div>
                       <p className="text-sm truncate">"{r.commentText}"</p>
                     </div>
@@ -322,6 +323,16 @@ export default function AnalyticsPage() {
           </CardContent>
         </Card>
       </main>
+
+      <footer className="border-t bg-white/80">
+        <div className="container mx-auto flex flex-col gap-3 px-4 py-5 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <p>Copyright {new Date().getFullYear()} Komentra.</p>
+          <div className="flex flex-wrap items-center gap-4">
+            <Link href={`/contact?source=app&workspaceId=${selectedWorkspaceId || ''}`} className="hover:text-foreground">Contact</Link>
+            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

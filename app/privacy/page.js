@@ -1,142 +1,186 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import { ShieldCheck, ArrowLeft, Mail, Database, Instagram, Trash2 } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
+import {
+  ArrowLeft,
+  Database,
+  Instagram,
+  LockKeyhole,
+  Mail,
+  ShieldCheck,
+  Trash2,
+  UserCheck,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PublicFooter } from '@/components/public-footer';
 import logoImage from '@/logo.png';
 
 export const metadata = {
-  title: 'Privacy Policy - Komentra',
-  description: 'Privacy Policy for Komentra, an Instagram comment automation platform.',
+  title: 'Privacy Policy',
+  description:
+    'How Komentra collects, uses, protects, and deletes account, Instagram, automation, workspace, and analytics data.',
+  alternates: { canonical: '/privacy' },
+  openGraph: {
+    title: 'Privacy Policy | Komentra',
+    description: 'Privacy and data use details for Komentra Instagram comment and DM automation.',
+    url: '/privacy',
+    siteName: 'Komentra',
+    type: 'article',
+  },
 };
+
+const updatedAt = 'May 18, 2026';
 
 const sections = [
   {
     icon: Database,
-    title: 'Information We Collect',
+    title: 'Data We Collect',
     body: [
-      'Account information such as your name, email address, password hash, and email verification status.',
-      'Instagram account information you choose to connect, including username, account ID, account type, access token, token expiry, media selected for automation, comments, messages, webhook events, and automation activity.',
-      'Automation settings such as keywords, public replies, direct message text, link buttons, follow-gating settings, and analytics generated from automation runs.',
-      'Basic technical information such as request logs, error logs, IP address, browser details, and timestamps needed to operate and secure the service.',
+      'Account details you provide, such as name or username, email address, password hash, verification status, and account timestamps.',
+      'Workspace data, including workspace names, selected Instagram account records, connected account status, and workspace-level settings.',
+      'Instagram data needed to run the product, such as account ID, username, account type, access token, token expiry, eligible media, comments, messages, webhook events, and automation activity.',
+      'Automation and analytics data, including keywords, match type, reply variants, DM text, link buttons, follow-gating settings, trigger counts, recent matches, and audience records.',
+      'Basic technical records such as request timestamps, error logs, browser details, and IP-related security information used to operate and protect the service.',
     ],
   },
   {
     icon: Instagram,
-    title: 'How We Use Instagram Data',
+    title: 'How Instagram Data Is Used',
     body: [
-      'Komentra uses Instagram data only to provide the features you request, including connecting your Instagram Business or Creator account, showing eligible posts, monitoring selected comments, sending configured replies, sending configured DMs, and showing automation analytics.',
-      'We do not sell Instagram data. We do not use Instagram data for unrelated advertising, profiling, or resale.',
-      'We only request permissions needed for comment automation, messaging automation, account connection, webhook delivery, and related analytics.',
+      'Komentra uses Instagram data to connect your Business or Creator account, display eligible posts, monitor selected comments or DMs, send configured replies, send configured messages, and show analytics.',
+      'We do not sell Instagram data, use it for unrelated advertising, or build unrelated profiles from connected account data.',
+      'Access tokens are used only to perform actions that you configure or request inside Komentra.',
     ],
   },
   {
-    icon: ShieldCheck,
-    title: 'How We Protect Data',
+    icon: UserCheck,
+    title: 'Account And Service Messages',
     body: [
-      'We use HTTPS for data transmitted between your browser and Komentra.',
-      'Passwords are stored as hashes, not plain text.',
-      'Access to production systems and databases is limited to authorized operators.',
-      'Instagram access tokens are used only to perform actions you configure inside Komentra.',
-    ],
-  },
-  {
-    icon: Mail,
-    title: 'Email And Service Messages',
-    body: [
-      'We use your email address for account verification, login support, security messages, and service-related updates.',
+      'Your email address is used for account verification, login support, password reset messages, important security notices, and direct support replies.',
+      'We may use your submitted contact form details to understand and respond to the request you sent.',
       'We do not sell your email address or share it with advertisers.',
     ],
   },
   {
-    icon: Trash2,
-    title: 'Data Deletion',
+    icon: LockKeyhole,
+    title: 'Security And Retention',
     body: [
-      'You can disconnect an Instagram account inside the Komentra dashboard. Disconnecting removes the linked account record and related automations from active use.',
-      'You can request full account deletion by emailing privacy@komentra.tech from the email address used for your Komentra account.',
-      'After receiving a valid deletion request, we will delete or anonymize your account data, connected Instagram account data, automations, and related analytics unless we are required to keep limited records for legal, security, or fraud-prevention reasons.',
+      'Komentra uses HTTPS for browser communication and stores passwords as hashes instead of plain text.',
+      'Production data access is limited to people or systems that need it to operate, support, secure, or maintain the service.',
+      'We keep operational and analytics records while they are useful for the product, support, security, or legal obligations, unless deletion is requested and no limited retention reason applies.',
+    ],
+  },
+  {
+    icon: Trash2,
+    title: 'Deletion And Your Choices',
+    body: [
+      'You can disconnect an Instagram account from the dashboard. Disconnecting removes that linked account from active use and removes related active automations.',
+      'You can request account deletion or Instagram data deletion by emailing admin@komentra.tech from the email address used for your Komentra account.',
+      'After a valid request, we will delete or anonymize account, workspace, connected Instagram, automation, and related analytics data unless limited records must be kept for security, fraud prevention, legal, or dispute reasons.',
     ],
   },
 ];
 
 export default function PrivacyPage() {
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white via-violet-50/30 to-fuchsia-50/30">
-      <nav className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-30">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center">
+    <main className="min-h-screen bg-white text-slate-950">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
+        <div className="container mx-auto flex items-center justify-between gap-4 px-4 py-3">
+          <Link href="/" className="flex items-center gap-2">
             <Image src={logoImage} alt="Komentra" priority className="h-11 w-auto object-contain" />
+            <span className="text-lg font-semibold tracking-tight">Komentra</span>
           </Link>
           <Button asChild variant="ghost">
             <Link href="/">
-              <ArrowLeft className="w-4 h-4 mr-2" />
+              <ArrowLeft className="mr-2 h-4 w-4" />
               Home
             </Link>
           </Button>
         </div>
-      </nav>
+      </header>
 
-      <main className="container mx-auto px-4 py-14 max-w-4xl">
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center gap-2 bg-violet-100 text-violet-700 px-4 py-2 rounded-full text-sm font-medium mb-5">
-            <ShieldCheck className="w-4 h-4" />
-            Privacy and data use
+      <section className="border-b border-slate-200 bg-slate-50">
+        <div className="container mx-auto max-w-5xl px-4 py-14">
+          <div className="max-w-3xl">
+            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-medium text-slate-700">
+              <ShieldCheck className="h-4 w-4 text-emerald-600" />
+              Privacy and data use
+            </div>
+            <h1 className="mt-6 text-4xl font-semibold tracking-tight sm:text-5xl">Komentra Privacy Policy</h1>
+            <p className="mt-5 text-lg leading-8 text-slate-600">
+              This policy explains what Komentra collects, why we collect it, how Instagram data is used, and how you can request deletion.
+            </p>
+            <p className="mt-4 text-sm text-slate-500">Last updated: {updatedAt}</p>
           </div>
-          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-slate-950">
-            Komentra Privacy Policy
-          </h1>
-          <p className="text-muted-foreground mt-4 max-w-2xl mx-auto">
-            This policy explains what we collect, why we collect it, and how you can request deletion of your data.
-          </p>
-          <p className="text-sm text-muted-foreground mt-3">Last updated: May 15, 2026</p>
         </div>
+      </section>
 
-        <Card className="border-0 shadow-xl bg-white/85 backdrop-blur-sm mb-6">
-          <CardContent className="p-6 md:p-8 space-y-4 text-sm md:text-base text-slate-700 leading-7">
-            <p>
-              Komentra is an Instagram comment and DM automation service operated for users who connect their own Instagram Business or Creator accounts. By using Komentra, you agree to the collection and use of information described in this Privacy Policy.
-            </p>
-            <p>
-              If you do not agree with this policy, please do not use Komentra or connect your Instagram account.
-            </p>
-          </CardContent>
-        </Card>
+      <section className="container mx-auto grid max-w-5xl gap-8 px-4 py-12 lg:grid-cols-[0.8fr_1.2fr]">
+        <aside className="lg:sticky lg:top-24 lg:self-start">
+          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold">Plain-language summary</h2>
+            <div className="mt-4 space-y-3 text-sm leading-6 text-slate-600">
+              <p>We collect the data needed to create your account, connect Instagram, run automations, and show analytics.</p>
+              <p>Instagram data is used for the automation features you configure. It is not sold.</p>
+              <p>For privacy questions or deletion requests, contact us at admin@komentra.tech.</p>
+            </div>
+            <Button asChild className="mt-5 w-full bg-slate-950 hover:bg-slate-800">
+              <Link href="/contact?topic=privacy">Contact privacy support</Link>
+            </Button>
+          </div>
+        </aside>
 
         <div className="space-y-5">
-          {sections.map((section) => (
-            <Card key={section.title} className="border-0 shadow-md bg-white/90">
-              <CardContent className="p-6 md:p-7">
-                <div className="flex items-start gap-4">
-                  <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md shadow-violet-500/20 flex-shrink-0">
-                    <section.icon className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-bold mb-3">{section.title}</h2>
-                    <ul className="space-y-2 text-sm md:text-base text-muted-foreground leading-7">
-                      {section.body.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+          <article className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-2xl font-semibold">About this policy</h2>
+            <div className="mt-4 space-y-4 text-sm leading-7 text-slate-600">
+              <p>
+                Komentra is an Instagram comment and DM automation service for users who connect their own Instagram Business or Creator accounts.
+              </p>
+              <p>
+                If you use Komentra or connect an Instagram account, you agree to the data practices described here. If you do not agree, do not connect your Instagram account or use the service.
+              </p>
+            </div>
+          </article>
 
-        <Card className="border-0 shadow-xl bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 text-white mt-8">
-          <CardContent className="p-7 md:p-8">
-            <h2 className="text-2xl font-bold mb-3">Contact Us</h2>
-            <p className="opacity-90 leading-7">
-              For privacy questions, data access requests, or deletion requests, contact us at{' '}
-              <a href="mailto:privacy@komentra.tech" className="font-semibold underline underline-offset-4">
-                privacy@komentra.tech
-              </a>
-              .
-            </p>
-          </CardContent>
-        </Card>
-      </main>
-    </div>
+          {sections.map((section) => (
+            <article key={section.title} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start gap-4">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-slate-950 text-white">
+                  <section.icon className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold">{section.title}</h2>
+                  <ul className="mt-4 space-y-3 text-sm leading-7 text-slate-600">
+                    {section.body.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </article>
+          ))}
+
+          <article className="rounded-lg border border-slate-200 bg-slate-50 p-6">
+            <div className="flex items-start gap-4">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-white text-slate-950 shadow-sm">
+                <Mail className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-xl font-semibold">Contact</h2>
+                <p className="mt-3 text-sm leading-7 text-slate-600">
+                  For privacy questions, data access requests, or deletion requests, email{' '}
+                  <a href="mailto:admin@komentra.tech" className="font-semibold text-slate-950 underline underline-offset-4">
+                    admin@komentra.tech
+                  </a>
+                  .
+                </p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <PublicFooter />
+    </main>
   );
 }

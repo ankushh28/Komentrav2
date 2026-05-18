@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { getDb } from '@/lib/mongo';
 import { hashPassword, comparePassword, signToken, getUserFromRequest } from '@/lib/auth';
-import { sendOtpEmail, generateOtp, sendPasswordResetOtpEmail } from '@/lib/email';
+import { sendOtpEmail, generateOtp, sendPasswordResetOtpEmail, sendContactEmail } from '@/lib/email';
 import { getQueue } from '@/lib/queue';
 
 const META_APP_ID = process.env.META_APP_ID;
@@ -15,6 +15,16 @@ const REDIRECT_URI = `${BASE_URL}/api/instagram/callback`;
 
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
+}
+
+const CONTACT_TOPICS = new Set(['general', 'support', 'privacy', 'billing', 'partnership']);
+
+function cleanText(value, max = 500) {
+  return String(value || '').trim().slice(0, max);
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function getPath(params) {
@@ -1447,6 +1457,9 @@ async function dispatch(req, params, method) {
   // health
   if (path === '/' || path === '/health') return json({ ok: true });
 
+  // Contact
+  if (path === '/contact' && method === 'POST') return handleContact(req);
+
   // Auth
   if (path === '/auth/signup' && method === 'POST') return handleSignup(req);
   if (path === '/auth/verify-otp' && method === 'POST') return handleVerifyOtp(req);
@@ -1510,6 +1523,41 @@ if (path === '/auth/me' && method === 'GET') return handleMe(req);
   if (path === '/webhook' && method === 'POST') return handleWebhookEvent(req);
 
   return json({ error: 'Not Found', path }, 404);
+}
+
+async function handleContact(req) {
+  let payload;
+  try {
+    payload = await req.json();
+  } catch {
+    return json({ error: 'Invalid request body' }, 400);
+  }
+
+  if (cleanText(payload.website, 200)) {
+    return json({ ok: true });
+  }
+
+  const message = {
+    name: cleanText(payload.name, 120),
+    email: cleanText(payload.email, 200).toLowerCase(),
+    company: cleanText(payload.company, 160),
+    instagram: cleanText(payload.instagram, 80),
+    topic: cleanText(payload.topic || 'general', 40).toLowerCase(),
+    message: cleanText(payload.message, 4000),
+  };
+
+  if (!message.name) return json({ error: 'Name is required' }, 400);
+  if (!message.email || !isValidEmail(message.email)) return json({ error: 'A valid email is required' }, 400);
+  if (!CONTACT_TOPICS.has(message.topic)) return json({ error: 'Choose a valid topic' }, 400);
+  if (message.message.length < 10) return json({ error: 'Message must be at least 10 characters' }, 400);
+
+  try {
+    await sendContactEmail(message);
+    return json({ ok: true });
+  } catch (e) {
+    console.error('Failed to send contact email', e);
+    return json({ error: 'Unable to send your message right now. Please email admin@komentra.tech.' }, 500);
+  }
 }
 
 export async function GET(request, { params }) {

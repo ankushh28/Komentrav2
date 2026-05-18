@@ -1,142 +1,362 @@
-'use client';
-
-import { useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import logoImage from '@/logo.png';
 import {
-  Bot, Zap, MessageSquare, Send, Sparkles, ShieldCheck, BarChart3,
-  Hash, UserCheck, ArrowRight, CheckCircle2, Instagram,
+  ArrowRight,
+  BarChart3,
+  CheckCircle2,
+  Inbox,
+  Instagram,
+  MessageSquare,
+  ShieldCheck,
+  Sparkles,
+  Users,
+  Workflow,
+  Zap,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { PublicFooter } from '@/components/public-footer';
+import { HomeAuthRedirect } from './home-auth-redirect';
+import logoImage from '@/logo.png';
+
+export const metadata = {
+  title: {
+    absolute: 'Komentra | Instagram Comment and DM Automation for Creators',
+  },
+  description:
+    'Turn Instagram comments into public replies, smart DMs, link delivery, and audience insights with Komentra.',
+  alternates: { canonical: '/' },
+  openGraph: {
+    title: 'Komentra | Instagram Comment and DM Automation',
+    description:
+      'Automate Instagram comment replies and DMs for creators, brands, and agencies without losing the human feel.',
+    url: '/',
+    siteName: 'Komentra',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Komentra | Instagram Comment and DM Automation',
+    description: 'Instagram comment and DM automation built for creators, brands, and agencies.',
+  },
+};
+
+const features = [
+  {
+    icon: MessageSquare,
+    title: 'Comment-triggered replies',
+    text: 'Listen for keywords on selected posts and publish a clean public reply without sitting in comments all day.',
+  },
+  {
+    icon: Inbox,
+    title: 'Smart DM follow-up',
+    text: 'Send the right message, link, or button when someone asks for price, details, guide, catalog, or booking info.',
+  },
+  {
+    icon: Workflow,
+    title: 'Creator-friendly setup',
+    text: 'Choose a workspace, connect Instagram, pick a post, add keywords, and launch the automation in minutes.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Instagram data boundaries',
+    text: 'Use Instagram data only for the automation you configure, with clear deletion and privacy controls.',
+  },
+  {
+    icon: BarChart3,
+    title: 'Audience and analytics',
+    text: 'See triggers, DMs, top keywords, recent matches, and the people engaging with each workspace.',
+  },
+  {
+    icon: Users,
+    title: 'Agency workspace flow',
+    text: 'Keep accounts and automations organized by workspace so client campaigns do not get mixed together.',
+  },
+];
+
+const steps = [
+  ['01', 'Connect Instagram', 'Use Meta login to connect an eligible Business or Creator account.'],
+  ['02', 'Create the automation', 'Pick a post, add trigger keywords, write reply variants, and add DM buttons.'],
+  ['03', 'Publish and monitor', 'Turn it on, watch matches appear, and improve campaigns from analytics.'],
+];
+
+const useCases = [
+  'Send a product link when someone comments "price".',
+  'Deliver a free guide from comments without manual inbox work.',
+  'Route campaign leads from reels into DMs with button links.',
+  'Track which keywords and posts create the most replies.',
+];
+
+const faqs = [
+  {
+    question: 'Who is Komentra for?',
+    answer:
+      'Komentra is built for Instagram creators, small brands, coaches, and agencies that use comments and DMs to collect leads or deliver links.',
+  },
+  {
+    question: 'Do I need an Instagram Business or Creator account?',
+    answer:
+      'Yes. Instagram automation features require an eligible Instagram Business or Creator account connected through Meta permissions.',
+  },
+  {
+    question: 'Can I use different keywords for one post?',
+    answer:
+      'Yes. You can add multiple trigger keywords and choose how matching should work for a comment or DM automation.',
+  },
+  {
+    question: 'Does Komentra sell Instagram data?',
+    answer:
+      'No. Komentra uses connected Instagram data to provide the automation, analytics, and support features you request.',
+  },
+  {
+    question: 'How do I request help or data deletion?',
+    answer:
+      'Use the contact page or email admin@komentra.tech from the email address used for your Komentra account.',
+  },
+];
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map((faq) => ({
+    '@type': 'Question',
+    name: faq.question,
+    acceptedAnswer: {
+      '@type': 'Answer',
+      text: faq.answer,
+    },
+  })),
+};
 
 export default function Home() {
-  const router = useRouter();
-
-  useEffect(() => {
-    const t = localStorage.getItem('token');
-    if (t) router.replace('/dashboard');
-  }, [router]);
-
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white via-violet-50/30 to-fuchsia-50/30">
-      {/* Nav */}
-      <nav className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-30">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Image src={logoImage} alt="Komentra" priority className="h-11 w-auto object-contain" />
+    <main className="min-h-screen bg-white text-slate-950">
+      <HomeAuthRedirect />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />
+
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
+        <div className="container mx-auto flex items-center justify-between gap-4 px-4 py-3">
+          <Link href="/" className="flex items-center gap-2">
+            <Image src={logoImage} alt="Komentra" priority className="h-11 w-auto object-contain" />
+            <span className="text-lg font-semibold tracking-tight">Komentra</span>
+          </Link>
+          <nav className="hidden items-center gap-6 text-sm font-medium text-slate-600 md:flex">
+            <Link href="#features" className="hover:text-slate-950">Features</Link>
+            <Link href="#how-it-works" className="hover:text-slate-950">How it works</Link>
+            <Link href="#faq" className="hover:text-slate-950">FAQ</Link>
+            <Link href="/contact" className="hover:text-slate-950">Contact</Link>
+          </nav>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" onClick={() => router.push('/auth?mode=login')}>Sign in</Button>
-            <Button onClick={() => router.push('/auth?mode=signup')} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
-              Get started <ArrowRight className="w-4 h-4 ml-1" />
+            <Button asChild variant="ghost" className="hidden sm:inline-flex">
+              <Link href="/auth?mode=login">Sign in</Link>
+            </Button>
+            <Button asChild className="bg-slate-950 hover:bg-slate-800">
+              <Link href="/auth?mode=signup">
+                Get started <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
             </Button>
           </div>
         </div>
-      </nav>
+      </header>
 
-      {/* Hero */}
-      <section className="relative overflow-hidden pt-16 pb-24">
-        <div className="absolute top-20 -left-32 w-96 h-96 bg-violet-300/30 rounded-full blur-3xl"></div>
-        <div className="absolute top-40 -right-32 w-96 h-96 bg-fuchsia-300/30 rounded-full blur-3xl"></div>
-        <div className="container mx-auto px-4 relative z-10 text-center max-w-4xl">
-          <div className="inline-flex items-center gap-2 bg-violet-100 text-violet-700 px-4 py-2 rounded-full text-sm font-medium mb-6">
-            <Sparkles className="w-4 h-4" /> Built for creators, brands, and agencies
+      <section className="border-b border-slate-200 bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_72%)]">
+        <div className="container mx-auto grid min-h-[calc(100vh-76px)] items-center gap-10 px-4 py-14 lg:grid-cols-[1.05fr_0.95fr] lg:py-20">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-medium text-slate-700 shadow-sm">
+              <Sparkles className="h-4 w-4 text-amber-500" />
+              Built for creators, brands, and agencies
+            </div>
+            <h1 className="mt-6 max-w-4xl text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl lg:text-6xl">
+              Turn Instagram comments into replies, DMs, and real leads.
+            </h1>
+            <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
+              Komentra helps you respond faster when people ask for links, prices, guides, or details. Build keyword automations, send useful DMs, and understand what is converting.
+            </p>
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Button asChild size="lg" className="bg-slate-950 hover:bg-slate-800">
+                <Link href="/auth?mode=signup">
+                  Start free <ArrowRight className="ml-2 h-5 w-5" />
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline">
+                <Link href="/contact">Talk to us</Link>
+              </Button>
+            </div>
+            <div className="mt-8 grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
+              {['No credit card needed', 'Meta-based connection', 'Workspace-ready'].map((item) => (
+                <span key={item} className="inline-flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  {item}
+                </span>
+              ))}
+            </div>
           </div>
-          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight bg-gradient-to-br from-slate-900 to-violet-600 bg-clip-text text-transparent leading-[1.1]">
-            Auto-reply to Instagram comments.<br />Send smart DMs on autopilot.
-          </h1>
-          <p className="text-lg md:text-xl text-muted-foreground mt-6 max-w-2xl mx-auto">
-            Komentra turns comments into quick replies and DMs, so interested people get the right link without manual follow-up.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center mt-8">
-            <Button onClick={() => router.push('/auth?mode=signup')} size="lg" className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-xl shadow-violet-500/30 text-base px-8">
-              Start free <ArrowRight className="w-5 h-5 ml-2" />
-            </Button>
-            <Button onClick={() => router.push('/auth?mode=login')} size="lg" variant="outline" className="text-base px-8">
-              I have an account
-            </Button>
-          </div>
-          <div className="flex items-center justify-center gap-6 mt-10 text-sm text-muted-foreground flex-wrap">
-            <span className="flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Verified Meta integration</span>
-            <span className="flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> No credit card</span>
-            <span className="flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Setup in 2 minutes</span>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-xl shadow-slate-200/70">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                <div>
+                  <p className="text-sm font-semibold">Campaign automation</p>
+                  <p className="text-xs text-slate-500">Product launch reel</p>
+                </div>
+                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">Live</span>
+              </div>
+              <div className="mt-4 grid gap-3">
+                <div className="rounded-lg bg-white p-4 shadow-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">When someone comments</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {['price', 'details', 'link'].map((word) => (
+                      <span key={word} className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
+                        {word}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg bg-white p-4 shadow-sm">
+                    <MessageSquare className="h-5 w-5 text-sky-600" />
+                    <p className="mt-3 text-sm font-semibold">Public reply</p>
+                    <p className="mt-1 text-sm text-slate-500">"Sent the details to your inbox."</p>
+                  </div>
+                  <div className="rounded-lg bg-white p-4 shadow-sm">
+                    <Inbox className="h-5 w-5 text-rose-600" />
+                    <p className="mt-3 text-sm font-semibold">Direct message</p>
+                    <p className="mt-1 text-sm text-slate-500">Message plus link buttons.</p>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {[
+                    ['128', 'Triggers'],
+                    ['116', 'Replies'],
+                    ['94', 'DMs sent'],
+                  ].map(([value, label]) => (
+                    <div key={label} className="rounded-lg bg-white p-4 text-center shadow-sm">
+                      <p className="text-2xl font-semibold">{value}</p>
+                      <p className="text-xs text-slate-500">{label}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* Feature grid */}
-      <section className="container mx-auto px-4 pb-24">
-        <h2 className="text-3xl md:text-4xl font-bold text-center mb-3">Everything you need. Nothing you don't.</h2>
-        <p className="text-center text-muted-foreground mb-12 max-w-2xl mx-auto">Set up the replies, DMs, links, and follow checks your Instagram workflow needs.</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {[
-            { icon: Zap, title: 'Multi-keyword triggers', desc: 'Add as many trigger words as you want. Choose match type: contains, exact, starts-with.', color: 'from-amber-400 to-orange-500' },
-            { icon: MessageSquare, title: '3 reply variants', desc: 'Avoid spammy repetition. We randomly pick from up to 3 replies for natural variety.', color: 'from-rose-400 to-fuchsia-500' },
-            { icon: Send, title: 'DMs with link buttons', desc: 'Send a button-template DM with up to 3 web links. Higher click-through than plain text.', color: 'from-indigo-400 to-violet-500' },
-            { icon: UserCheck, title: 'Follow-gating, verified', desc: 'Require a follow first. We check Instagram\'s API to verify the actual follow before unlocking.', color: 'from-emerald-400 to-teal-500' },
-            { icon: BarChart3, title: 'Real-time analytics', desc: 'Conversion funnel, top keywords, per-automation stats, recent matches — all in one dashboard.', color: 'from-cyan-400 to-blue-500' },
-            { icon: ShieldCheck, title: 'Built to scale', desc: 'Redis-backed queue with worker pool. Webhooks ack in <100ms. Ready for thousands of accounts.', color: 'from-violet-400 to-purple-600' },
-          ].map((f) => (
-            <Card key={f.title} className="border-0 shadow-md hover:shadow-xl transition-shadow">
-              <CardContent className="p-6">
-                <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${f.color} flex items-center justify-center mb-4 shadow-md`}>
-                  <f.icon className="w-5 h-5 text-white" />
-                </div>
-                <h3 className="font-bold text-lg mb-2">{f.title}</h3>
-                <p className="text-muted-foreground text-sm">{f.desc}</p>
-              </CardContent>
-            </Card>
+      <section id="features" className="container mx-auto px-4 py-20">
+        <div className="max-w-2xl">
+          <p className="text-sm font-semibold uppercase tracking-wide text-sky-700">Features</p>
+          <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Everything needed for a cleaner Instagram lead flow.</h2>
+          <p className="mt-4 text-slate-600">
+            Komentra keeps the core workflow simple: trigger, reply, DM, measure, improve.
+          </p>
+        </div>
+        <div className="mt-10 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {features.map((feature) => (
+            <article key={feature.title} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <feature.icon className="h-5 w-5 text-slate-950" />
+              <h3 className="mt-4 text-lg font-semibold">{feature.title}</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{feature.text}</p>
+            </article>
           ))}
         </div>
       </section>
 
-      {/* How it works */}
-      <section className="bg-white/60 border-y py-20">
-        <div className="container mx-auto px-4 max-w-5xl">
-          <h2 className="text-3xl md:text-4xl font-bold text-center mb-3">How it works</h2>
-          <p className="text-center text-muted-foreground mb-14">From signup to your first auto-reply in under 2 minutes.</p>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            {[
-              { step: '01', title: 'Sign up', desc: 'Create an account with email + OTP verification.', icon: Bot },
-              { step: '02', title: 'Connect Instagram', desc: 'One-click Meta OAuth. We handle long-lived tokens & webhook subscriptions.', icon: Instagram },
-              { step: '03', title: 'Build automation', desc: 'Pick a post, add trigger keywords, write replies + DM with link buttons.', icon: Zap },
-              { step: '04', title: 'Watch it fire', desc: 'Live analytics show every match, reply, and DM in real time.', icon: BarChart3 },
-            ].map((s, i) => (
-              <div key={s.step} className="relative">
-                <div className="text-5xl font-extrabold text-violet-200 mb-2">{s.step}</div>
-                <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center mb-3 shadow-md">
-                  <s.icon className="w-5 h-5 text-white" />
-                </div>
-                <h3 className="font-bold mb-1">{s.title}</h3>
-                <p className="text-sm text-muted-foreground">{s.desc}</p>
-              </div>
+      <section id="how-it-works" className="border-y border-slate-200 bg-slate-50">
+        <div className="container mx-auto px-4 py-20">
+          <div className="grid gap-10 lg:grid-cols-[0.8fr_1.2fr]">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-wide text-sky-700">How it works</p>
+              <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Launch the automation without rebuilding your workflow.</h2>
+              <p className="mt-4 text-slate-600">
+                The current app flow stays focused: workspaces, Instagram accounts, automations, analytics, and audience.
+              </p>
+            </div>
+            <div className="grid gap-4">
+              {steps.map(([number, title, text]) => (
+                <article key={number} className="grid gap-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:grid-cols-[64px_1fr]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-950 text-sm font-semibold text-white">
+                    {number}
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold">{title}</h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">{text}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="use-cases" className="container mx-auto grid gap-10 px-4 py-20 lg:grid-cols-[1fr_1fr]">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-wide text-sky-700">Use cases</p>
+          <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Useful for campaigns where timing matters.</h2>
+          <p className="mt-4 text-slate-600">
+            People often ask while attention is high. Komentra helps you answer while the post is still fresh.
+          </p>
+        </div>
+        <div className="grid gap-3">
+          {useCases.map((item) => (
+            <div key={item} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <Zap className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
+              <p className="text-sm leading-6 text-slate-700">{item}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border-y border-slate-200 bg-slate-950 text-white">
+        <div className="container mx-auto grid gap-8 px-4 py-16 md:grid-cols-3">
+          {[
+            ['Privacy aware', 'Clear contact and deletion paths, with Instagram data used only for configured automation.'],
+            ['Operationally simple', 'Workspace-based account management for creators, brands, and agency client work.'],
+            ['Built around action', 'Replies, DMs, link buttons, and analytics sit in one practical flow.'],
+          ].map(([title, text]) => (
+            <div key={title}>
+              <ShieldCheck className="h-5 w-5 text-emerald-400" />
+              <h2 className="mt-4 text-lg font-semibold">{title}</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">{text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section id="faq" className="container mx-auto px-4 py-20">
+        <div className="mx-auto max-w-3xl">
+          <p className="text-sm font-semibold uppercase tracking-wide text-sky-700">FAQ</p>
+          <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Questions before you connect Instagram?</h2>
+          <div className="mt-8 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+            {faqs.map((faq) => (
+              <details key={faq.question} className="group p-5">
+                <summary className="cursor-pointer list-none text-base font-semibold">
+                  {faq.question}
+                </summary>
+                <p className="mt-3 text-sm leading-6 text-slate-600">{faq.answer}</p>
+              </details>
             ))}
           </div>
         </div>
       </section>
 
-      {/* CTA */}
-      <section className="container mx-auto px-4 py-20 text-center max-w-3xl">
-        <Card className="border-0 shadow-2xl bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 text-white overflow-hidden relative">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl"></div>
-          <CardContent className="p-12 relative z-10">
-            <Hash className="w-12 h-12 mx-auto mb-4 opacity-80" />
-            <h3 className="text-3xl font-bold mb-3">Ready to convert comments into DMs?</h3>
-            <p className="opacity-90 mb-8 max-w-xl mx-auto">Sign up free, connect your Instagram Business account, and have your first automation live in 2 minutes.</p>
-            <Button onClick={() => router.push('/auth?mode=signup')} size="lg" variant="secondary" className="text-base px-8 shadow-lg">
-              Get started free <ArrowRight className="w-5 h-5 ml-2" />
+      <section className="container mx-auto px-4 pb-20">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center sm:p-10">
+          <Instagram className="mx-auto h-8 w-8 text-slate-950" />
+          <h2 className="mt-4 text-3xl font-semibold tracking-tight">Ready to make Instagram follow-up easier?</h2>
+          <p className="mx-auto mt-3 max-w-2xl text-slate-600">
+            Create your account, connect Instagram, and build your first comment-to-DM automation.
+          </p>
+          <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+            <Button asChild size="lg" className="bg-slate-950 hover:bg-slate-800">
+              <Link href="/auth?mode=signup">Get started free</Link>
             </Button>
-          </CardContent>
-        </Card>
+            <Button asChild size="lg" variant="outline">
+              <Link href="/contact">Contact support</Link>
+            </Button>
+          </div>
+        </div>
       </section>
 
-      <footer className="border-t py-8 text-center text-sm text-muted-foreground">
-        <div className="flex items-center justify-center gap-3 flex-wrap">
-          <span>&copy; {new Date().getFullYear()} Komentra. Built for creators.</span>
-          <Link href="/privacy" className="text-violet-600 hover:underline">Privacy Policy</Link>
-        </div>
-      </footer>
-    </div>
+      <PublicFooter />
+    </main>
   );
 }

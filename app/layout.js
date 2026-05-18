@@ -2,8 +2,27 @@ import './globals.css';
 import { Toaster } from '@/components/ui/sonner';
 
 export const metadata = {
-  title: 'Komentra - Instagram Comment Automation',
-  description: 'Turn Instagram comments into replies and DMs with simple keyword automations.',
+  metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'https://komentra.tech'),
+  title: {
+    default: 'Komentra | Instagram Comment and DM Automation',
+    template: '%s | Komentra',
+  },
+  description: 'Turn Instagram comments into replies, DMs, links, and audience insights with simple keyword automations.',
+  applicationName: 'Komentra',
+  keywords: [
+    'Instagram automation',
+    'Instagram comment automation',
+    'Instagram DM automation',
+    'creator automation',
+    'agency Instagram tools',
+  ],
+  openGraph: {
+    siteName: 'Komentra',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+  },
 };
 
 export default function RootLayout({ children }) {

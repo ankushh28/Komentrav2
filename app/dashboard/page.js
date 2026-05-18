@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,15 +23,15 @@ import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
-  Pencil, Settings, Briefcase, Users, Menu,
+  Pencil, Settings, Briefcase, Users, Menu, LifeBuoy,
 } from 'lucide-react';
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
   return (
     <div className="flex items-start gap-3 pt-2">
-      <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-500 to-violet-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">{step}</div>
+      <div className="w-8 h-8 rounded-lg bg-slate-950 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">{step}</div>
       <div>
-        <h3 className="font-semibold flex items-center gap-2"><Icon className="w-4 h-4 text-violet-600" />{title}</h3>
+        <h3 className="font-semibold flex items-center gap-2"><Icon className="w-4 h-4 text-slate-700" />{title}</h3>
         {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
       </div>
     </div>
@@ -80,10 +81,10 @@ function AutomationTypeDialog({ open, onOpenChange, onSelect }) {
           <button
             type="button"
             onClick={() => onSelect('comment_dm')}
-            className="flex items-center gap-4 rounded-xl border p-4 text-left transition hover:border-violet-300 hover:bg-violet-50"
+            className="flex items-center gap-4 rounded-xl border p-4 text-left transition hover:border-slate-300 hover:bg-slate-50"
           >
-            <div className="w-11 h-11 rounded-xl bg-violet-100 flex items-center justify-center">
-              <MessageCircle className="w-5 h-5 text-violet-600" />
+            <div className="w-11 h-11 rounded-xl bg-slate-100 flex items-center justify-center">
+              <MessageCircle className="w-5 h-5 text-slate-700" />
             </div>
             <div className="flex-1">
               <p className="font-semibold text-base">Comment to DM</p>
@@ -94,10 +95,10 @@ function AutomationTypeDialog({ open, onOpenChange, onSelect }) {
           <button
             type="button"
             onClick={() => onSelect('dm_reply')}
-            className="flex items-center gap-4 rounded-xl border p-4 text-left transition hover:border-cyan-300 hover:bg-cyan-50"
+            className="flex items-center gap-4 rounded-xl border p-4 text-left transition hover:border-sky-300 hover:bg-slate-50"
           >
-            <div className="w-11 h-11 rounded-xl bg-cyan-100 flex items-center justify-center">
-              <Inbox className="w-5 h-5 text-cyan-600" />
+            <div className="w-11 h-11 rounded-xl bg-sky-100 flex items-center justify-center">
+              <Inbox className="w-5 h-5 text-sky-700" />
             </div>
             <div className="flex-1">
               <p className="font-semibold text-base">DM Auto-Reply</p>
@@ -191,7 +192,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
       <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0">
         <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
           <DialogTitle className="flex items-center gap-2 text-2xl">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center"><Wand2 className="w-5 h-5 text-white" /></div>
+            <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center"><Wand2 className="w-5 h-5 text-white" /></div>
             New Automation
           </DialogTitle>
           <DialogDescription>Configure how Komentra reacts when someone comments on your post.</DialogDescription>
@@ -204,9 +205,9 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 ml-11">
               {accounts.map((a) => (
                 <button key={a.id} onClick={() => { setSelectedAccount(a.id); setSelectedPost(null); }}
-                  className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-violet-500 bg-violet-50 shadow-sm' : 'border-border hover:border-violet-300'}`}>
+                  className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-slate-950 bg-slate-50 shadow-sm' : 'border-border hover:border-slate-300'}`}>
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-fuchsia-500 to-violet-500 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
+                    <div className="w-8 h-8 rounded-full bg-slate-950 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
                     <span className="font-medium">@{a.username}</span>
                   </div>
                 </button>
@@ -225,9 +226,9 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                   <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-h-64 overflow-y-auto p-1">
                     {media.map((m) => (
                       <button key={m.id} onClick={() => setSelectedPost(m)}
-                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-violet-500 ring-2 ring-violet-300' : 'border-transparent hover:border-violet-300'}`}>
+                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-slate-950 ring-2 ring-slate-300' : 'border-transparent hover:border-slate-300'}`}>
                         <img src={m.thumbnail_url || m.media_url} alt="" className="w-full h-full object-cover" />
-                        {selectedPost?.id === m.id && <div className="absolute inset-0 bg-violet-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
+                        {selectedPost?.id === m.id && <div className="absolute inset-0 bg-slate-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
                       </button>
                     ))}
                   </div>
@@ -250,9 +251,9 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                 {keywords.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {keywords.map((k) => (
-                      <Badge key={k} className="bg-violet-100 text-violet-700 hover:bg-violet-200 pl-3 pr-1 py-1 text-sm">
+                      <Badge key={k} className="bg-slate-100 text-slate-700 hover:bg-slate-200 pl-3 pr-1 py-1 text-sm">
                         {k}
-                        <button onClick={() => setKeywords(keywords.filter(x => x !== k))} className="ml-1 hover:bg-violet-300 rounded-full p-0.5"><X className="w-3 h-3" /></button>
+                        <button onClick={() => setKeywords(keywords.filter(x => x !== k))} className="ml-1 hover:bg-slate-300 rounded-full p-0.5"><X className="w-3 h-3" /></button>
                       </Badge>
                     ))}
                   </div>
@@ -293,7 +294,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           {selectedPost && (
             <div className="space-y-3">
               <SectionHeader icon={UserPlus} step="5" title="Ask To Follow First" subtitle="Send a follow-prompt with verification before the main DM." />
-              <div className="ml-11 rounded-xl border bg-gradient-to-br from-violet-50/60 to-indigo-50/60 p-4 space-y-3">
+              <div className="ml-11 rounded-xl border bg-slate-50 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-medium text-sm">Require user to follow first</p>
@@ -328,7 +329,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label className="text-xs flex items-center gap-1"><LinkIcon className="w-3 h-3" /> Link buttons (max 3)</Label>
-                    {buttons.length < 3 && <Button type="button" size="sm" variant="ghost" onClick={() => setButtons([...buttons, { title: '', url: '' }])} className="text-violet-600 h-7"><Plus className="w-3 h-3 mr-1" /> Add link</Button>}
+                    {buttons.length < 3 && <Button type="button" size="sm" variant="ghost" onClick={() => setButtons([...buttons, { title: '', url: '' }])} className="text-slate-700 h-7"><Plus className="w-3 h-3 mr-1" /> Add link</Button>}
                   </div>
                   {buttons.map((b, i) => (
                     <div key={i} className="flex items-center gap-2 rounded-lg border p-2 bg-white">
@@ -353,7 +354,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
 
         <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={create} disabled={saving || !canCreate} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
+          <Button onClick={create} disabled={saving || !canCreate} className="bg-slate-950 hover:bg-slate-800">
             {saving ? 'Creating...' : <>Create Automation <ChevronRight className="w-4 h-4 ml-1" /></>}
           </Button>
         </DialogFooter>
@@ -418,7 +419,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
       <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto p-0">
         <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
           <DialogTitle className="flex items-center gap-2 text-2xl">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-500 flex items-center justify-center"><Inbox className="w-5 h-5 text-white" /></div>
+            <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center"><Inbox className="w-5 h-5 text-white" /></div>
             DM Auto-Reply
           </DialogTitle>
           <DialogDescription>Auto-reply when someone DMs you a specific keyword.</DialogDescription>
@@ -430,9 +431,9 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 ml-11">
               {accounts.map((a) => (
                 <button key={a.id} onClick={() => setSelectedAccount(a.id)}
-                  className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-violet-500 bg-violet-50 shadow-sm' : 'border-border hover:border-violet-300'}`}>
+                  className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-slate-950 bg-slate-50 shadow-sm' : 'border-border hover:border-slate-300'}`}>
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-fuchsia-500 to-violet-500 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
+                    <div className="w-8 h-8 rounded-full bg-slate-950 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
                     <span className="font-medium">@{a.username}</span>
                   </div>
                 </button>
@@ -453,9 +454,9 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
                 {keywords.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {keywords.map((k) => (
-                      <Badge key={k} className="bg-violet-100 text-violet-700 hover:bg-violet-200 pl-3 pr-1 py-1 text-sm">
+                      <Badge key={k} className="bg-slate-100 text-slate-700 hover:bg-slate-200 pl-3 pr-1 py-1 text-sm">
                         {k}
-                        <button onClick={() => setKeywords(keywords.filter(x => x !== k))} className="ml-1 hover:bg-violet-300 rounded-full p-0.5"><X className="w-3 h-3" /></button>
+                        <button onClick={() => setKeywords(keywords.filter(x => x !== k))} className="ml-1 hover:bg-slate-300 rounded-full p-0.5"><X className="w-3 h-3" /></button>
                       </Badge>
                     ))}
                   </div>
@@ -503,7 +504,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
                   </div>
                 ))}
                 {buttons.length < 3 && (
-                  <Button type="button" size="sm" variant="ghost" onClick={() => setButtons([...buttons, { title: '', url: '' }])} className="text-violet-600">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setButtons([...buttons, { title: '', url: '' }])} className="text-slate-700">
                     <Plus className="w-3 h-3 mr-1" /> Add link
                   </Button>
                 )}
@@ -521,7 +522,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
 
         <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={create} disabled={saving || !canCreate} className="bg-gradient-to-r from-cyan-600 to-blue-600 shadow-lg shadow-blue-500/30">
+          <Button onClick={create} disabled={saving || !canCreate} className="bg-slate-950 hover:bg-slate-800">
             {saving ? 'Creating...' : <>Create DM Reply <ChevronRight className="w-4 h-4 ml-1" /></>}
           </Button>
         </DialogFooter>
@@ -640,7 +641,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
       <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0">
         <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
           <DialogTitle className="flex items-center gap-2 text-2xl">
-            <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${isDmReply ? 'bg-cyan-600' : 'bg-violet-600'}`}>
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-slate-950">
               {isDmReply ? <Inbox className="w-5 h-5 text-white" /> : <MessageCircle className="w-5 h-5 text-white" />}
             </div>
             Edit Automation
@@ -654,9 +655,9 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 ml-11">
               {accounts.map((a) => (
                 <button key={a.id} onClick={() => { setSelectedAccount(a.id); if (!isDmReply) setSelectedPost(null); }}
-                  className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-violet-500 bg-violet-50 shadow-sm' : 'border-border hover:border-violet-300'}`}>
+                  className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-slate-950 bg-slate-50 shadow-sm' : 'border-border hover:border-slate-300'}`}>
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-fuchsia-500 to-violet-500 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
+                    <div className="w-8 h-8 rounded-full bg-slate-950 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
                     <span className="font-medium">@{a.username}</span>
                   </div>
                 </button>
@@ -674,9 +675,9 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
                   <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-h-64 overflow-y-auto p-1">
                     {media.map((m) => (
                       <button key={m.id} onClick={() => setSelectedPost(m)}
-                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-violet-500 ring-2 ring-violet-300' : 'border-transparent hover:border-violet-300'}`}>
+                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-slate-950 ring-2 ring-slate-300' : 'border-transparent hover:border-slate-300'}`}>
                         <img src={m.thumbnail_url || m.media_url} alt="" className="w-full h-full object-cover" />
-                        {selectedPost?.id === m.id && <div className="absolute inset-0 bg-violet-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
+                        {selectedPost?.id === m.id && <div className="absolute inset-0 bg-slate-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
                       </button>
                     ))}
                   </div>
@@ -697,9 +698,9 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
               {keywords.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {keywords.map((k) => (
-                    <Badge key={k} className="bg-violet-100 text-violet-700 hover:bg-violet-200 pl-3 pr-1 py-1 text-sm">
+                    <Badge key={k} className="bg-slate-100 text-slate-700 hover:bg-slate-200 pl-3 pr-1 py-1 text-sm">
                       {k}
-                      <button onClick={() => setKeywords(keywords.filter(x => x !== k))} className="ml-1 hover:bg-violet-300 rounded-full p-0.5"><X className="w-3 h-3" /></button>
+                      <button onClick={() => setKeywords(keywords.filter(x => x !== k))} className="ml-1 hover:bg-slate-300 rounded-full p-0.5"><X className="w-3 h-3" /></button>
                     </Badge>
                   ))}
                 </div>
@@ -772,7 +773,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
                 </div>
               ))}
               {buttons.length < 3 && (
-                <Button type="button" size="sm" variant="ghost" onClick={() => setButtons([...buttons, { title: '', url: '' }])} className="text-violet-600">
+                <Button type="button" size="sm" variant="ghost" onClick={() => setButtons([...buttons, { title: '', url: '' }])} className="text-slate-700">
                   <Plus className="w-3 h-3 mr-1" /> Add link
                 </Button>
               )}
@@ -787,7 +788,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
 
         <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={save} disabled={saving || !canSave} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
+          <Button onClick={save} disabled={saving || !canSave} className="bg-slate-950 hover:bg-slate-800">
             {saving ? 'Saving...' : 'Save changes'}
           </Button>
         </DialogFooter>
@@ -800,21 +801,21 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, disabledActio
   const acct = accounts.find(x => x.id === a.instagramAccountId);
   const keywords = keywordList(a);
   const isDmReply = a.type === 'dm_reply';
-  const accentBorder = isDmReply ? 'border-l-cyan-500' : 'border-l-violet-500';
+  const accentBorder = isDmReply ? 'border-l-sky-600' : 'border-l-slate-950';
   const TypeIcon = isDmReply ? Inbox : MessageCircle;
   const typeBadge = isDmReply
-    ? <Badge className="bg-cyan-100 text-cyan-700 text-xs">DM Auto-Reply</Badge>
-    : <Badge className="bg-violet-100 text-violet-700 text-xs">Comment to DM</Badge>;
+    ? <Badge className="bg-sky-100 text-sky-700 text-xs">DM Auto-Reply</Badge>
+    : <Badge className="bg-slate-100 text-slate-700 text-xs">Comment to DM</Badge>;
 
   return (
     <Card className={`hover:shadow-md transition-shadow border-l-4 ${accentBorder} bg-white`}>
       <CardContent className="p-5">
         <div className="flex items-start gap-4">
           {!isDmReply && a.postThumbnail ? (
-            <img src={a.postThumbnail} alt="" className="w-24 h-24 rounded-xl object-cover flex-shrink-0 ring-2 ring-violet-100" />
+            <img src={a.postThumbnail} alt="" className="w-24 h-24 rounded-xl object-cover flex-shrink-0 ring-2 ring-slate-100" />
           ) : (
-            <div className={`w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0 ${isDmReply ? 'bg-gradient-to-br from-cyan-100 to-blue-100' : 'bg-gradient-to-br from-violet-100 to-fuchsia-100'}`}>
-              <TypeIcon className={`w-7 h-7 ${isDmReply ? 'text-cyan-600' : 'text-violet-600'}`} />
+            <div className={`w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0 ${isDmReply ? 'bg-slate-100' : 'bg-slate-100'}`}>
+              <TypeIcon className={`w-7 h-7 ${isDmReply ? 'text-sky-700' : 'text-slate-700'}`} />
             </div>
           )}
           <div className="flex-1 min-w-0">
@@ -824,11 +825,11 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, disabledActio
                   <h3 className="font-semibold text-lg leading-tight">{a.name || keywords[0] || 'Automation'}</h3>
                   {typeBadge}
                   {acct && <Badge variant="outline" className="text-xs">@{acct.username}</Badge>}
-                  {a.postPermalink && <a href={a.postPermalink} target="_blank" rel="noreferrer" className="text-xs text-violet-600 hover:underline inline-flex items-center gap-1">View Post <ExternalLink className="w-3 h-3" /></a>}
+                  {a.postPermalink && <a href={a.postPermalink} target="_blank" rel="noreferrer" className="text-xs text-slate-700 hover:underline inline-flex items-center gap-1">View Post <ExternalLink className="w-3 h-3" /></a>}
                 </div>
                 <div className="flex items-center gap-2 mt-3 flex-wrap">
                   <span className="text-sm font-medium text-slate-700">{triggerLabel(a)} {matchLabel(a.matchType)}</span>
-                  {keywords.slice(0, 5).map(k => <Badge key={k} className="bg-violet-100 text-violet-700 text-sm">{k}</Badge>)}
+                  {keywords.slice(0, 5).map(k => <Badge key={k} className="bg-slate-100 text-slate-700 text-sm">{k}</Badge>)}
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -869,7 +870,7 @@ function WorkspaceSettingsDialog({ open, onOpenChange, workspace, onRename, onSt
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Settings className="w-5 h-5 text-violet-600" /> Workspace settings
+            <Settings className="w-5 h-5 text-slate-700" /> Workspace settings
           </DialogTitle>
           <DialogDescription>Rename, disable, re-enable, or permanently delete this workspace.</DialogDescription>
         </DialogHeader>
@@ -1078,8 +1079,8 @@ export default function DashboardPage() {
   const activeCount = automations.filter(a => a.isActive).length;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/40">
-      <header className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-20">
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white/90 backdrop-blur sticky top-0 z-20">
         <div className="container mx-auto px-4 py-3 flex min-w-0 items-center justify-between gap-3">
           <Image src={logoImage} alt="Komentra" priority className="h-11 w-auto max-w-[62%] shrink object-contain" />
           <div className="flex shrink-0 items-center gap-2 md:gap-3">
@@ -1113,6 +1114,9 @@ export default function DashboardPage() {
             <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => router.push('/audience')}>
               <Users className="w-4 h-4 mr-1" /> Audience
             </Button>
+            <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => router.push(`/contact?source=dashboard&workspaceId=${selectedWorkspaceId || ''}`)}>
+              <LifeBuoy className="w-4 h-4 mr-1" /> Support
+            </Button>
             <span className="hidden max-w-40 truncate text-sm text-muted-foreground lg:inline">{user.username || user.email}</span>
             <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={onLogout}><LogOut className="w-4 h-4 mr-1" /> Logout</Button>
             <DropdownMenu>
@@ -1129,6 +1133,9 @@ export default function DashboardPage() {
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push('/audience')}>
                   <Users className="w-4 h-4 mr-2" /> Audience
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push(`/contact?source=dashboard&workspaceId=${selectedWorkspaceId || ''}`)}>
+                  <LifeBuoy className="w-4 h-4 mr-2" /> Support
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onLogout}>
@@ -1160,8 +1167,8 @@ export default function DashboardPage() {
         {selectedWorkspace && (
           <div className="mb-6 flex items-center justify-between gap-3 rounded-lg border bg-white p-4">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="w-10 h-10 shrink-0 rounded-lg bg-violet-100 flex items-center justify-center">
-                <Briefcase className="w-5 h-5 text-violet-600" />
+              <div className="w-10 h-10 shrink-0 rounded-lg bg-slate-100 flex items-center justify-center">
+                <Briefcase className="w-5 h-5 text-slate-700" />
               </div>
               <div className="min-w-0">
                 <p className="truncate font-semibold">{selectedWorkspace.name}</p>
@@ -1174,18 +1181,18 @@ export default function DashboardPage() {
           </div>
         )}
         <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mb-10">
-          <Card className="border-0 shadow-sm bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white">
-            <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">Total Automations</p><p className="text-3xl font-bold">{automations.length}</p></CardContent>
+          <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Total Automations</p><p className="text-3xl font-bold">{automations.length}</p></CardContent>
           </Card>
-          <Card className="border-0 shadow-sm bg-gradient-to-br from-emerald-500 to-teal-500 text-white">
-            <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">Active Now</p><p className="text-3xl font-bold">{activeCount}</p></CardContent>
+          <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Active Now</p><p className="text-3xl font-bold">{activeCount}</p></CardContent>
           </Card>
         </div>
 
         <section className="mb-10">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold flex items-center gap-2"><Instagram className="w-5 h-5 text-violet-600" /> Connected Accounts</h2>
-            <Button onClick={connectIG} disabled={connecting || !workspaceActive || accounts.length > 0} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
+            <h2 className="text-xl font-bold flex items-center gap-2"><Instagram className="w-5 h-5 text-slate-700" /> Connected Accounts</h2>
+            <Button onClick={connectIG} disabled={connecting || !workspaceActive || accounts.length > 0} className="bg-slate-950 hover:bg-slate-800">
               <Plus className="w-4 h-4 mr-2" /> {connecting ? 'Redirecting...' : accounts.length > 0 ? 'Account connected' : 'Connect Instagram'}
             </Button>
           </div>
@@ -1194,7 +1201,7 @@ export default function DashboardPage() {
               <CardContent className="py-12 text-center">
                 <Instagram className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
                 <p className="text-muted-foreground mb-4">No Instagram accounts connected yet.</p>
-                <Button onClick={connectIG} disabled={connecting || !workspaceActive} className="bg-gradient-to-r from-indigo-600 to-violet-600">Connect Your First Account</Button>
+                <Button onClick={connectIG} disabled={connecting || !workspaceActive} className="bg-slate-950 hover:bg-slate-800">Connect Your First Account</Button>
               </CardContent>
             </Card>
           ) : (
@@ -1203,7 +1210,7 @@ export default function DashboardPage() {
                 <Card key={a.id} className="hover:shadow-lg transition-shadow">
                   <CardContent className="p-5 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-fuchsia-500 via-violet-500 to-indigo-500 flex items-center justify-center shadow-md">
+                      <div className="w-12 h-12 rounded-full bg-slate-950 flex items-center justify-center shadow-md">
                         {a.pfp ? (
                           <img src={a.pfp} alt={a.username} className="w-full h-full object-cover rounded-full" />
                         ) : (
@@ -1226,7 +1233,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold flex items-center gap-2"><Zap className="w-5 h-5 text-amber-500" /> Automations</h2>
             {accounts.length > 0 && (
-              <Button disabled={!workspaceActive} onClick={() => setShowTypeChooser(true)} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
+              <Button disabled={!workspaceActive} onClick={() => setShowTypeChooser(true)} className="bg-slate-950 hover:bg-slate-800">
                 <Plus className="w-4 h-4 mr-2" /> New Automation
               </Button>
             )}
@@ -1257,6 +1264,16 @@ export default function DashboardPage() {
           )}
         </section>
       </main>
+
+      <footer className="border-t bg-white/80">
+        <div className="container mx-auto flex flex-col gap-3 px-4 py-5 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <p>Copyright {new Date().getFullYear()} Komentra.</p>
+          <div className="flex flex-wrap items-center gap-4">
+            <Link href={`/contact?source=dashboard&workspaceId=${selectedWorkspaceId || ''}`} className="hover:text-foreground">Contact</Link>
+            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
+          </div>
+        </div>
+      </footer>
 
       <AutomationTypeDialog
         open={showTypeChooser}

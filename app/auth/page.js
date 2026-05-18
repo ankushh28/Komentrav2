@@ -144,9 +144,7 @@ function AuthInner() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 via-violet-50 to-fuchsia-50 p-4 relative overflow-hidden">
-      <div className="absolute top-0 -left-32 w-96 h-96 bg-violet-300/30 rounded-full blur-3xl"></div>
-      <div className="absolute bottom-0 -right-32 w-96 h-96 bg-fuchsia-300/30 rounded-full blur-3xl"></div>
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 relative overflow-hidden">
       <div className="w-full max-w-md relative z-10">
         <div className="flex justify-between items-center mb-6">
           <Button variant="ghost" size="sm" onClick={() => router.push('/')}>
@@ -155,11 +153,11 @@ function AuthInner() {
           <Image src={logoImage} alt="Komentra" priority className="h-11 w-auto object-contain" />
         </div>
 
-        <Card className="shadow-2xl border-0 backdrop-blur-sm bg-white/85">
+        <Card className="shadow-xl border border-slate-200 bg-white">
           <CardHeader className="text-center">
             {step === 'otp' ? (
               <>
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-tr from-violet-500 to-fuchsia-500 flex items-center justify-center mb-2">
+                <div className="w-14 h-14 mx-auto rounded-lg bg-slate-950 flex items-center justify-center mb-2">
                   <Mail className="w-7 h-7 text-white" />
                 </div>
                 <CardTitle className="text-2xl">Verify your email</CardTitle>
@@ -169,7 +167,7 @@ function AuthInner() {
               </>
             ) : step === 'forgot-email' ? (
               <>
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-tr from-violet-500 to-fuchsia-500 flex items-center justify-center mb-2">
+                <div className="w-14 h-14 mx-auto rounded-lg bg-slate-950 flex items-center justify-center mb-2">
                   <KeyRound className="w-7 h-7 text-white" />
                 </div>
                 <CardTitle className="text-2xl">Forgot your password?</CardTitle>
@@ -179,7 +177,7 @@ function AuthInner() {
               </>
             ) : step === 'forgot-reset' ? (
               <>
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-tr from-violet-500 to-fuchsia-500 flex items-center justify-center mb-2">
+                <div className="w-14 h-14 mx-auto rounded-lg bg-slate-950 flex items-center justify-center mb-2">
                   <KeyRound className="w-7 h-7 text-white" />
                 </div>
                 <CardTitle className="text-2xl">Reset your password</CardTitle>
@@ -215,7 +213,7 @@ function AuthInner() {
                     {mode === 'login' && (
                       <button
                         type="button"
-                        className="text-xs text-violet-600 font-medium hover:underline"
+                        className="text-xs text-slate-700 font-medium hover:text-slate-950 hover:underline"
                         onClick={() => setStep('forgot-email')}
                       >
                         Forgot password?
@@ -224,12 +222,12 @@ function AuthInner() {
                   </div>
                   <Input id="password" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
                 </div>
-                <Button type="submit" className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30" disabled={loading}>
+                <Button type="submit" className="w-full bg-slate-950 hover:bg-slate-800" disabled={loading}>
                   {loading ? 'Please wait...' : (mode === 'signup' ? 'Send verification code' : 'Sign in')}
                 </Button>
                 <p className="text-sm text-center text-muted-foreground">
                   {mode === 'signup' ? 'Already have an account?' : "Don't have one yet?"}{' '}
-                  <button type="button" className="text-violet-600 font-medium hover:underline" onClick={() => setMode(mode === 'signup' ? 'login' : 'signup')}>
+                  <button type="button" className="text-slate-700 font-medium hover:text-slate-950 hover:underline" onClick={() => setMode(mode === 'signup' ? 'login' : 'signup')}>
                     {mode === 'signup' ? 'Sign in' : 'Sign up'}
                   </button>
                 </p>
@@ -241,12 +239,12 @@ function AuthInner() {
                   <Input id="otp" required maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
                     placeholder="000000" className="text-center text-2xl tracking-[0.5em] font-mono" />
                 </div>
-                <Button type="submit" className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30" disabled={loading || otp.length !== 6}>
+                <Button type="submit" className="w-full bg-slate-950 hover:bg-slate-800" disabled={loading || otp.length !== 6}>
                   {loading ? 'Verifying...' : (<><ShieldCheck className="w-4 h-4 mr-2" /> Verify & continue</>)}
                 </Button>
                 <div className="text-sm text-center text-muted-foreground">
                   Didn't get it?{' '}
-                  <button type="button" className="text-violet-600 font-medium hover:underline" onClick={resend} disabled={loading}>
+                  <button type="button" className="text-slate-700 font-medium hover:text-slate-950 hover:underline" onClick={resend} disabled={loading}>
                     Resend code
                   </button>
                 </div>
@@ -260,7 +258,7 @@ function AuthInner() {
                   <Label htmlFor="email">Email</Label>
                   <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@brand.com" />
                 </div>
-                <Button type="submit" className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30" disabled={loading}>
+                <Button type="submit" className="w-full bg-slate-950 hover:bg-slate-800" disabled={loading}>
                   {loading ? 'Sending...' : 'Send reset code'}
                 </Button>
                 <button type="button" onClick={() => setStep('credentials')} className="w-full text-xs text-muted-foreground hover:underline">
@@ -278,12 +276,12 @@ function AuthInner() {
                   <Label htmlFor="newPassword">New password</Label>
                   <Input id="newPassword" type="password" required minLength={6} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="••••••••" />
                 </div>
-                <Button type="submit" className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30" disabled={loading}>
+                <Button type="submit" className="w-full bg-slate-950 hover:bg-slate-800" disabled={loading}>
                   {loading ? 'Resetting...' : 'Reset password'}
                 </Button>
                 <div className="text-sm text-center text-muted-foreground">
                   Didn't get the code?{' '}
-                  <button type="button" className="text-violet-600 font-medium hover:underline" onClick={resendReset} disabled={loading}>
+                  <button type="button" className="text-slate-700 font-medium hover:text-slate-950 hover:underline" onClick={resendReset} disabled={loading}>
                     Resend
                   </button>
                 </div>

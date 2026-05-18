@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -104,15 +105,15 @@ export default function AudiencePage() {
   if (!token) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/40">
-      <header className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-20">
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white/90 backdrop-blur sticky top-0 z-20">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
               <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>
             <div className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-violet-600" />
+              <Users className="w-5 h-5 text-slate-700" />
               <h1 className="text-xl font-bold">Audience</h1>
             </div>
           </div>
@@ -123,7 +124,7 @@ export default function AudiencePage() {
                 {workspaces.map(w => <SelectItem key={w.id} value={w.id}>{w.name}{w.status === 'disabled' ? ' (disabled)' : ''}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Button onClick={exportCsv} className="bg-gradient-to-r from-indigo-600 to-violet-600">
+            <Button onClick={exportCsv} className="bg-slate-950 hover:bg-slate-800">
               <Download className="w-4 h-4 mr-1" /> Export audience
             </Button>
           </div>
@@ -138,23 +139,23 @@ export default function AudiencePage() {
               {workspaces.map(w => <SelectItem key={w.id} value={w.id}>{w.name}{w.status === 'disabled' ? ' (disabled)' : ''}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button onClick={exportCsv} className="bg-gradient-to-r from-indigo-600 to-violet-600">
+          <Button onClick={exportCsv} className="bg-slate-950 hover:bg-slate-800">
             <Download className="w-4 h-4 mr-1" /> Export audience
           </Button>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card className="border-0 shadow-sm bg-gradient-to-br from-indigo-500 to-violet-600 text-white">
-            <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">Audience</p><p className="text-3xl font-bold">{audience.length}</p></CardContent>
+          <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Audience</p><p className="text-3xl font-bold">{audience.length}</p></CardContent>
           </Card>
-          <Card className="border-0 shadow-sm bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white">
-            <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">Triggers</p><p className="text-3xl font-bold">{totals.triggers}</p></CardContent>
+          <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Triggers</p><p className="text-3xl font-bold">{totals.triggers}</p></CardContent>
           </Card>
-          <Card className="border-0 shadow-sm bg-gradient-to-br from-emerald-500 to-teal-500 text-white">
-            <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">Comments</p><p className="text-3xl font-bold">{totals.comments}</p></CardContent>
+          <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Comments</p><p className="text-3xl font-bold">{totals.comments}</p></CardContent>
           </Card>
-          <Card className="border-0 shadow-sm bg-gradient-to-br from-rose-500 to-orange-500 text-white">
-            <CardContent className="p-5"><p className="text-xs opacity-80 mb-1">DMs</p><p className="text-3xl font-bold">{totals.dms}</p></CardContent>
+          <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">DMs</p><p className="text-3xl font-bold">{totals.dms}</p></CardContent>
           </Card>
         </div>
 
@@ -201,8 +202,8 @@ export default function AudiencePage() {
                           <div className="text-xs text-muted-foreground">{member.instagramScopedUserId}</div>
                         </td>
                         <td className="text-right font-semibold">{member.triggerCount}</td>
-                        <td className="text-right"><Badge className="bg-violet-100 text-violet-700"><MessageCircle className="w-3 h-3 mr-1" /> {member.commentTriggerCount}</Badge></td>
-                        <td className="text-right"><Badge className="bg-cyan-100 text-cyan-700"><Inbox className="w-3 h-3 mr-1" /> {member.dmTriggerCount}</Badge></td>
+                        <td className="text-right"><Badge className="bg-slate-100 text-slate-700"><MessageCircle className="w-3 h-3 mr-1" /> {member.commentTriggerCount}</Badge></td>
+                        <td className="text-right"><Badge className="bg-sky-100 text-sky-700"><Inbox className="w-3 h-3 mr-1" /> {member.dmTriggerCount}</Badge></td>
                         <td className="py-3 max-w-[220px] truncate">{member.lastAutomationName || '-'}</td>
                         <td className="py-3 max-w-[280px] truncate">"{member.lastMessageText || ''}"</td>
                         <td className="py-3 text-right text-xs text-muted-foreground whitespace-nowrap">{formatDate(member.lastTriggeredAt)}</td>
@@ -215,6 +216,16 @@ export default function AudiencePage() {
           </CardContent>
         </Card>
       </main>
+
+      <footer className="border-t bg-white/80">
+        <div className="container mx-auto flex flex-col gap-3 px-4 py-5 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <p>Copyright {new Date().getFullYear()} Komentra.</p>
+          <div className="flex flex-wrap items-center gap-4">
+            <Link href={`/contact?source=app&workspaceId=${selectedWorkspaceId || ''}`} className="hover:text-foreground">Contact</Link>
+            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
