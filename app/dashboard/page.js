@@ -11,24 +11,18 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { BrandLogo } from '@/components/brand-logo';
 import { toast } from 'sonner';
 import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
-  X, Hash, Shuffle, Wand2, Bot, ChevronRight, BarChart3, MessageCircle, Inbox,
-  Pencil, Settings, Briefcase, Users,
+  X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
+  Pencil, Settings, Briefcase, Users, Menu,
 } from 'lucide-react';
-
-function Logo() {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/30">
-        <Bot className="w-5 h-5 text-white" />
-      </div>
-      <span className="text-xl font-extrabold tracking-tight">Komentra</span>
-    </div>
-  );
-}
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
   return (
@@ -1085,9 +1079,9 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/40">
       <header className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-20">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Logo />
-          <div className="flex items-center gap-2 md:gap-3">
+        <div className="container mx-auto px-4 py-3 flex min-w-0 items-center justify-between gap-3">
+          <BrandLogo className="max-w-[62%] shrink min-w-0" />
+          <div className="flex shrink-0 items-center gap-2 md:gap-3">
             <div className="hidden sm:flex items-center gap-2">
               <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
                 <SelectTrigger className="w-48 bg-white">
@@ -1112,22 +1106,43 @@ export default function DashboardPage() {
               <div className={`w-2 h-2 rounded-full ${workspaceActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></div>
               <span className="text-muted-foreground">{workspaceActive ? `${activeCount} active` : 'disabled'}</span>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => router.push('/analytics')}>
+            <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => router.push('/analytics')}>
               <BarChart3 className="w-4 h-4 mr-1" /> Analytics
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => router.push('/audience')}>
+            <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => router.push('/audience')}>
               <Users className="w-4 h-4 mr-1" /> Audience
             </Button>
-            <span className="text-sm text-muted-foreground hidden sm:inline">{user.username || user.email}</span>
-            <Button variant="ghost" size="sm" onClick={onLogout}><LogOut className="w-4 h-4 mr-1" /> Logout</Button>
+            <span className="hidden max-w-40 truncate text-sm text-muted-foreground lg:inline">{user.username || user.email}</span>
+            <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={onLogout}><LogOut className="w-4 h-4 mr-1" /> Logout</Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="md:hidden" aria-label="Open dashboard menu">
+                  <Menu className="w-5 h-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="truncate">{user.username || user.email}</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => router.push('/analytics')}>
+                  <BarChart3 className="w-4 h-4 mr-2" /> Analytics
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push('/audience')}>
+                  <Users className="w-4 h-4 mr-2" /> Audience
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={onLogout}>
+                  <LogOut className="w-4 h-4 mr-2" /> Logout
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
-        <div className="sm:hidden mb-4 flex items-center gap-2">
+        <div className="sm:hidden mb-4 flex min-w-0 items-center gap-2">
           <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
-            <SelectTrigger className="flex-1 bg-white">
+            <SelectTrigger className="min-w-0 flex-1 bg-white">
               <SelectValue placeholder="Workspace" />
             </SelectTrigger>
             <SelectContent>
@@ -1143,12 +1158,12 @@ export default function DashboardPage() {
         </div>
         {selectedWorkspace && (
           <div className="mb-6 flex items-center justify-between gap-3 rounded-lg border bg-white p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-violet-100 flex items-center justify-center">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="w-10 h-10 shrink-0 rounded-lg bg-violet-100 flex items-center justify-center">
                 <Briefcase className="w-5 h-5 text-violet-600" />
               </div>
-              <div>
-                <p className="font-semibold">{selectedWorkspace.name}</p>
+              <div className="min-w-0">
+                <p className="truncate font-semibold">{selectedWorkspace.name}</p>
                 <p className="text-xs text-muted-foreground">
                   {workspaceActive ? 'Active workspace' : 'Disabled workspace. Enable it before connecting accounts or editing automations.'}
                 </p>
