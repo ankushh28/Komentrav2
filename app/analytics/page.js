@@ -6,8 +6,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { BrandLogo } from '@/components/brand-logo';
 import {
-  Activity, Bot, ArrowLeft, BarChart3, Zap, MessageSquare, Send, ShieldCheck,
+  Activity, ArrowLeft, BarChart3, Zap, MessageSquare, Send, ShieldCheck,
   TrendingUp, UserCheck, Hash, Clock, Briefcase,
 } from 'lucide-react';
 import {
@@ -80,14 +81,15 @@ export default function AnalyticsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/40">
       <header className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-20">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="container mx-auto px-4 py-3 flex min-w-0 items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
               <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>
-            <div className="flex items-center gap-2">
+            <BrandLogo href="/dashboard" showText={false} markClassName="h-8 w-8" />
+            <div className="flex min-w-0 items-center gap-2">
               <BarChart3 className="w-5 h-5 text-violet-600" />
-              <h1 className="text-xl font-bold">Analytics</h1>
+              <h1 className="truncate text-xl font-bold">Analytics</h1>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-2">
@@ -111,9 +113,9 @@ export default function AnalyticsPage() {
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-6xl space-y-8">
-        <div className="sm:hidden flex items-center gap-2">
+        <div className="sm:hidden flex min-w-0 items-center gap-2">
           <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
-            <SelectTrigger className="flex-1 bg-white">
+            <SelectTrigger className="min-w-0 flex-1 bg-white">
               <SelectValue placeholder="Workspace" />
             </SelectTrigger>
             <SelectContent>

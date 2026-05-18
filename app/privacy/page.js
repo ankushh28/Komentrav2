@@ -1,12 +1,11 @@
 import Link from 'next/link';
-import { Bot, ShieldCheck, ArrowLeft, Mail, Database, Instagram, Trash2 } from 'lucide-react';
+import { ShieldCheck, ArrowLeft, Mail, Database, Instagram, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { BrandLogo } from '@/components/brand-logo';
+import { buildMetadata, routeMetadata } from '@/lib/seo';
 
-export const metadata = {
-  title: 'Privacy Policy - Komentra',
-  description: 'Privacy Policy for Komentra, an Instagram comment automation platform.',
-};
+export const metadata = buildMetadata(routeMetadata.privacy);
 
 const sections = [
   {
@@ -61,13 +60,8 @@ export default function PrivacyPage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-white via-violet-50/30 to-fuchsia-50/30">
       <nav className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-30">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/30">
-              <Bot className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-extrabold tracking-tight">Komentra</span>
-          </Link>
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <BrandLogo href="/" className="max-w-[58%]" />
           <Button asChild variant="ghost">
             <Link href="/">
               <ArrowLeft className="w-4 h-4 mr-2" />

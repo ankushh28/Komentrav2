@@ -7,18 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import { Bot, Mail, ArrowLeft, ShieldCheck, KeyRound } from 'lucide-react';
-
-function Logo() {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/30">
-        <Bot className="w-5 h-5 text-white" />
-      </div>
-      <span className="text-xl font-extrabold tracking-tight">Komentra</span>
-    </div>
-  );
-}
+import { Mail, ArrowLeft, ShieldCheck, KeyRound } from 'lucide-react';
+import { BrandLogo } from '@/components/brand-logo';
 
 function AuthInner() {
   const router = useRouter();
@@ -161,7 +151,7 @@ function AuthInner() {
           <Button variant="ghost" size="sm" onClick={() => router.push('/')}>
             <ArrowLeft className="w-4 h-4 mr-1" /> Home
           </Button>
-          <Logo />
+          <BrandLogo />
         </div>
 
         <Card className="shadow-2xl border-0 backdrop-blur-sm bg-white/85">

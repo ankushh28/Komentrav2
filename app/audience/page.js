@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { BrandLogo } from '@/components/brand-logo';
 import { ArrowLeft, Download, Search, Users, Activity, MessageCircle, Inbox } from 'lucide-react';
 
 function scopedHeaders(token, workspaceId, extra = {}) {
@@ -106,14 +107,15 @@ export default function AudiencePage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/40">
       <header className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-20">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+        <div className="container mx-auto px-4 py-3 flex min-w-0 items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
               <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>
-            <div className="flex items-center gap-2">
+            <BrandLogo href="/dashboard" showText={false} markClassName="h-8 w-8" />
+            <div className="flex min-w-0 items-center gap-2">
               <Users className="w-5 h-5 text-violet-600" />
-              <h1 className="text-xl font-bold">Audience</h1>
+              <h1 className="truncate text-xl font-bold">Audience</h1>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-2">
@@ -131,9 +133,9 @@ export default function AudiencePage() {
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-6xl space-y-6">
-        <div className="sm:hidden flex flex-col gap-2">
+        <div className="sm:hidden flex min-w-0 flex-col gap-2">
           <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
-            <SelectTrigger className="bg-white"><SelectValue placeholder="Workspace" /></SelectTrigger>
+            <SelectTrigger className="min-w-0 bg-white"><SelectValue placeholder="Workspace" /></SelectTrigger>
             <SelectContent>
               {workspaces.map(w => <SelectItem key={w.id} value={w.id}>{w.name}{w.status === 'disabled' ? ' (disabled)' : ''}</SelectItem>)}
             </SelectContent>
