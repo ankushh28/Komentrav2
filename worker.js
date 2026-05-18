@@ -443,6 +443,18 @@ async function assertCanSendForAccount(dbi, acct, flow, details = {}) {
   return true;
 }
 
+function logIfAutomationsPaused(acct, flow, details = {}) {
+  const pause = accountPauseState(acct);
+  if (!pause.paused) return false;
+  logAutomation(flow, 'send skipped because automations are paused', {
+    instagramAccountId: acct?._id || null,
+    reason: pause.reason,
+    pausedUntil: pause.pausedUntil || null,
+    ...details,
+  });
+  return true;
+}
+
 async function recordDeliveryPostProcessError(dbi, key, error) {
   await updateAutomationDelivery(dbi, key, {
     postProcessError: serializeError(error),
@@ -675,6 +687,14 @@ async function processJob(job) {
           });
           continue;
         }
+        if (logIfAutomationsPaused(acct, 'comment-dm', {
+          jobId: job.id,
+          automationId: auto._id,
+          commentId,
+        })) {
+          break;
+        }
+
         const deliveryKey = `comment_dm:${auto._id}:${commentId}`;
         const delivery = await claimAutomationDelivery(dbi, {
           key: deliveryKey,
@@ -1273,4 +1293,9 @@ worker.on('completed', (job) => console.log(`[worker] job ${job.id} done`));
 worker.on('failed', (job, err) => console.error(`[worker] job ${job?.id} failed:`, err.message));
 worker.on('error', (e) => console.error('[worker] error', e?.message));
 
-console.log('[worker] started, concurrency =', worker.opts.concurrency);
+console.log('[worker] started, concurrency =', worker.opts.concurrency, JSON.stringify({
+  automationsPaused: envFlag('AUTOMATIONS_PAUSED'),
+  dmCooldownSeconds: DM_COOLDOWN_SECONDS,
+  followRetryCooldownSeconds: FOLLOW_RETRY_COOLDOWN_SECONDS,
+  accountSendLimitPerHour: ACCOUNT_SEND_LIMIT_PER_HOUR,
+}));
