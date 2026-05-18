@@ -1,7 +1,9 @@
 import Link from 'next/link';
-import { Bot, ShieldCheck, ArrowLeft, Mail, Database, Instagram, Trash2 } from 'lucide-react';
+import Image from 'next/image';
+import { ShieldCheck, ArrowLeft, Mail, Database, Instagram, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import logoImage from '@/logo.png';
 
 export const metadata = {
   title: 'Privacy Policy - Komentra',
@@ -62,11 +64,8 @@ export default function PrivacyPage() {
     <div className="min-h-screen bg-gradient-to-b from-white via-violet-50/30 to-fuchsia-50/30">
       <nav className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-30">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/30">
-              <Bot className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-extrabold tracking-tight">Komentra</span>
+          <Link href="/" className="flex items-center">
+            <Image src={logoImage} alt="Komentra" priority className="h-11 w-auto object-contain" />
           </Link>
           <Button asChild variant="ghost">
             <Link href="/">

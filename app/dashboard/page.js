@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,7 +16,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { BrandLogo } from '@/components/brand-logo';
+import logoImage from '@/logo.png';
 import { toast } from 'sonner';
 import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
@@ -1080,7 +1081,7 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/40">
       <header className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-20">
         <div className="container mx-auto px-4 py-3 flex min-w-0 items-center justify-between gap-3">
-          <BrandLogo className="max-w-[62%] shrink min-w-0" />
+          <Image src={logoImage} alt="Komentra" priority className="h-11 w-auto max-w-[62%] shrink object-contain" />
           <div className="flex shrink-0 items-center gap-2 md:gap-3">
             <div className="hidden sm:flex items-center gap-2">
               <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>

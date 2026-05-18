@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import logoImage from '@/logo.png';
 import {
   Bot, Zap, MessageSquare, Send, Sparkles, ShieldCheck, BarChart3,
   Hash, UserCheck, ArrowRight, CheckCircle2, Instagram,
@@ -23,12 +25,7 @@ export default function Home() {
       {/* Nav */}
       <nav className="border-b bg-white/70 backdrop-blur-md sticky top-0 z-30">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/30">
-              <Bot className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-extrabold tracking-tight">Komentra</span>
-          </div>
+          <Image src={logoImage} alt="Komentra" priority className="h-11 w-auto object-contain" />
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={() => router.push('/auth?mode=login')}>Sign in</Button>
             <Button onClick={() => router.push('/auth?mode=signup')} className="bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-500/30">
