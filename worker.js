@@ -26,6 +26,19 @@ try {
 
 const QUEUE_NAME = 'webhook-events';
 const API_VERSION = process.env.META_API_VERSION || 'v22.0';
+const DEFAULT_COOLDOWN_MINUTES = 15;
+const DM_COOLDOWN_SECONDS = parsePositiveInt(
+  process.env.DM_AUTOMATION_COOLDOWN_SECONDS,
+  DEFAULT_COOLDOWN_MINUTES * 60,
+);
+const FOLLOW_RETRY_COOLDOWN_SECONDS = parsePositiveInt(
+  process.env.FOLLOW_RETRY_COOLDOWN_SECONDS,
+  DEFAULT_COOLDOWN_MINUTES * 60,
+);
+const ACCOUNT_SEND_LIMIT_PER_HOUR = parsePositiveInt(
+  process.env.META_ACCOUNT_SEND_LIMIT_PER_HOUR,
+  50,
+);
 
 const redis = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: null,
@@ -38,6 +51,23 @@ let dbPromise = mongo.connect().then(() => mongo.db(process.env.DB_NAME || 'ig_a
 async function db() { return dbPromise; }
 let audienceIndexesPromise;
 let deliveryIndexesPromise;
+
+function parsePositiveInt(value, fallback) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function envFlag(name) {
+  return ['1', 'true', 'yes', 'on'].includes(String(process.env[name] || '').trim().toLowerCase());
+}
+
+function graphSendError(result, fallbackMessage = 'Instagram Graph API send failed') {
+  if (result?.ok) return null;
+  const error = new Error(result?.data?.error?.message || fallbackMessage);
+  error.name = 'GraphSendError';
+  error.graph = result?.data?.error || result?.data || null;
+  return error;
+}
 
 // ---- Instagram API helpers ----
 async function replyToComment(accessToken, commentId, message) {
@@ -162,6 +192,7 @@ function serializeError(error) {
   return {
     message: error?.message || String(error),
     name: error?.name || null,
+    graph: error?.graph || null,
   };
 }
 
@@ -228,6 +259,10 @@ async function ensureDeliveryIndexes(dbi) {
       dbi.collection('automation_deliveries').createIndex(
         { createdAt: 1 },
         { expireAfterSeconds: Number.isFinite(expireAfterSeconds) ? expireAfterSeconds : 30 * 24 * 60 * 60 },
+      ),
+      dbi.collection('automation_deliveries').createIndex(
+        { expiresAt: 1 },
+        { expireAfterSeconds: 0 },
       ),
       dbi.collection('automation_deliveries').createIndex({ automationId: 1, createdAt: -1 }),
     ]).catch((e) => {
@@ -296,6 +331,116 @@ async function markDeliveryFailed(dbi, key, error) {
     status: 'send_failed',
     sendError: serializeError(error),
   });
+}
+
+async function claimCooldown(dbi, {
+  key,
+  automationId,
+  workspaceId,
+  instagramAccountId,
+  flow,
+  sourceEventId,
+  seconds,
+  jobId,
+}) {
+  await ensureDeliveryIndexes(dbi);
+  const now = new Date();
+  try {
+    await dbi.collection('automation_deliveries').insertOne({
+      _id: key,
+      automationId,
+      workspaceId: workspaceId || null,
+      instagramAccountId,
+      flow,
+      sourceEventId: sourceEventId || null,
+      jobId: jobId || null,
+      status: 'cooldown',
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: new Date(now.getTime() + seconds * 1000),
+    });
+    return { claimed: true, key };
+  } catch (e) {
+    if (isDuplicateKeyError(e)) return { claimed: false, key };
+    throw e;
+  }
+}
+
+function accountPauseState(acct) {
+  if (envFlag('AUTOMATIONS_PAUSED')) {
+    return { paused: true, reason: 'global env AUTOMATIONS_PAUSED is enabled' };
+  }
+  if (acct?.automationPausedUntil && new Date(acct.automationPausedUntil) > new Date()) {
+    return {
+      paused: true,
+      reason: acct.automationPauseReason || 'instagram account automations are temporarily paused',
+      pausedUntil: acct.automationPausedUntil,
+    };
+  }
+  return { paused: false };
+}
+
+function shouldPauseForGraphError(error) {
+  const code = error?.graph?.code;
+  const subcode = error?.graph?.error_subcode;
+  const message = String(error?.message || '').toLowerCase();
+  return [4, 17, 32, 613].includes(Number(code))
+    || ['rate limit', 'too many', 'restricted', 'temporarily blocked'].some(term => message.includes(term))
+    || !!subcode;
+}
+
+async function pauseAccountForGraphRisk(dbi, acct, error) {
+  if (!acct?._id || !shouldPauseForGraphError(error)) return;
+  const minutes = parsePositiveInt(process.env.GRAPH_ERROR_PAUSE_MINUTES, 60);
+  await dbi.collection('instagram_accounts').updateOne(
+    { _id: acct._id },
+    {
+      $set: {
+        automationPausedUntil: new Date(Date.now() + minutes * 60 * 1000),
+        automationPauseReason: error?.message || 'Instagram Graph API rejected automation send',
+        updatedAt: new Date(),
+      },
+    },
+  );
+}
+
+async function assertCanSendForAccount(dbi, acct, flow, details = {}) {
+  const pause = accountPauseState(acct);
+  if (pause.paused) {
+    logAutomation(flow, 'send skipped because automations are paused', {
+      instagramAccountId: acct?._id || null,
+      reason: pause.reason,
+      pausedUntil: pause.pausedUntil || null,
+      ...details,
+    });
+    return false;
+  }
+
+  const windowSeconds = 60 * 60;
+  const key = `rate:${acct._id}:${Math.floor(Date.now() / (windowSeconds * 1000))}`;
+  const count = await redis.incr(key);
+  if (count === 1) await redis.expire(key, windowSeconds + 60);
+  if (count > ACCOUNT_SEND_LIMIT_PER_HOUR) {
+    const minutes = parsePositiveInt(process.env.RATE_LIMIT_PAUSE_MINUTES, 60);
+    await dbi.collection('instagram_accounts').updateOne(
+      { _id: acct._id },
+      {
+        $set: {
+          automationPausedUntil: new Date(Date.now() + minutes * 60 * 1000),
+          automationPauseReason: `Per-account send limit exceeded (${ACCOUNT_SEND_LIMIT_PER_HOUR}/hour)`,
+          updatedAt: new Date(),
+        },
+      },
+    );
+    logAutomation(flow, 'send skipped by per-account rate limit', {
+      instagramAccountId: acct._id,
+      limit: ACCOUNT_SEND_LIMIT_PER_HOUR,
+      count,
+      ...details,
+    });
+    return false;
+  }
+  return true;
 }
 
 async function recordDeliveryPostProcessError(dbi, key, error) {
@@ -498,7 +643,7 @@ async function processJob(job) {
         workspaceId: acct.workspaceId,
         postId: mediaId,
         isActive: true,
-      }).toArray();
+      }).sort({ createdAt: -1 }).toArray();
       logAutomation('comment-dm', 'active automations loaded for post', {
         jobId: job.id,
         mediaId,
@@ -548,6 +693,13 @@ async function processJob(job) {
           });
           continue;
         }
+        const canSend = await assertCanSendForAccount(dbi, acct, 'comment-dm', {
+          jobId: job.id,
+          automationId: auto._id,
+          commentId,
+        });
+        if (!canSend) break;
+
         const reply = replies[Math.floor(Math.random() * replies.length)];
         let r1 = null;
         let rDM = null;
@@ -559,6 +711,8 @@ async function processJob(job) {
           ok: r1.ok,
           error: graphError(r1),
         });
+        const replyError = graphSendError(r1, 'Instagram rejected the public comment reply');
+        if (replyError) throw replyError;
 
         if (auto.askToFollow) {
           rDM = await sendFollowPrompt(
@@ -580,6 +734,8 @@ async function processJob(job) {
           ok: rDM?.ok,
           error: graphError(rDM),
         });
+          const dmError = graphSendError(rDM, 'Instagram rejected the private reply DM');
+          if (dmError) throw dmError;
           await markDeliverySent(dbi, deliveryKey, {
             replyResult: r1,
             dmResult: rDM,
@@ -587,13 +743,14 @@ async function processJob(job) {
           });
         } catch (e) {
           await markDeliveryFailed(dbi, deliveryKey, e);
+          await pauseAccountForGraphRisk(dbi, acct, e);
           logAutomation('comment-dm', 'send failed after delivery claim', {
             jobId: job.id,
             automationId: auto._id,
             deliveryKey,
             error: e?.message,
           });
-          continue;
+          break;
         }
 
         try {
@@ -628,6 +785,7 @@ async function processJob(job) {
             error: e?.message,
           });
         }
+        break;
       }
     }
 
@@ -695,8 +853,46 @@ async function processJob(job) {
           isFollowing: followCheck.isFollowing,
           ok: followCheck.ok,
         });
+        if (!followCheck.ok) {
+          logAutomation('follow-gate', 'skipped send because follow check failed', {
+            jobId: job.id,
+            automationId,
+            senderId,
+            error: followCheck.error || followCheck.raw?.error?.message || null,
+          });
+          continue;
+        }
         if (!followCheck.isFollowing) {
           const sourceEventId = postbackSourceEventId(msg, senderId, recipientId);
+          const canSend = await assertCanSendForAccount(dbi, acct, 'follow-gate', {
+            jobId: job.id,
+            automationId,
+            senderId,
+            flow: 'follow-not-verified',
+          });
+          if (!canSend) continue;
+
+          const cooldownKey = `follow_retry:${automationId}:${senderId}`;
+          const cooldown = await claimCooldown(dbi, {
+            key: cooldownKey,
+            automationId: auto._id,
+            workspaceId: auto.workspaceId || acct.workspaceId || null,
+            instagramAccountId: auto.instagramAccountId,
+            flow: 'follow-retry-cooldown',
+            sourceEventId: senderId,
+            seconds: FOLLOW_RETRY_COOLDOWN_SECONDS,
+            jobId: job.id,
+          });
+          if (!cooldown.claimed) {
+            logAutomation('follow-gate', 'retry prompt skipped by cooldown', {
+              jobId: job.id,
+              automationId,
+              senderId,
+              cooldownSeconds: FOLLOW_RETRY_COOLDOWN_SECONDS,
+            });
+            continue;
+          }
+
           const deliveryKey = `follow:${automationId}:${senderId}:${sourceEventId}`;
           const delivery = await claimAutomationDelivery(dbi, {
             key: deliveryKey,
@@ -722,9 +918,12 @@ async function processJob(job) {
             `Almost there! 🙏 We don't see your follow yet. Please follow @${acct.username} first, then tap below.`,
             auto.followButtonText || 'I Followed ✓', auto._id, acct.username,
           );
+          const retryError = graphSendError(retry, 'Instagram rejected the follow retry prompt');
+          if (retryError) throw retryError;
           await markDeliverySent(dbi, deliveryKey, { retryResult: retry, followCheck });
           } catch (e) {
             await markDeliveryFailed(dbi, deliveryKey, e);
+            await pauseAccountForGraphRisk(dbi, acct, e);
             logAutomation('follow-gate', 'send failed after delivery claim', {
               jobId: job.id,
               automationId,
@@ -756,6 +955,35 @@ async function processJob(job) {
         const dmText = auto.dmText || auto.dmMessage || '';
         const buttons = (auto.dmButtons || []).filter(b => b.title && b.url).slice(0, 3);
         const sourceEventId = postbackSourceEventId(msg, senderId, recipientId);
+        const canSend = await assertCanSendForAccount(dbi, acct, 'follow-gate', {
+          jobId: job.id,
+          automationId,
+          senderId,
+          flow: 'follow-confirmed',
+        });
+        if (!canSend) continue;
+
+        const cooldownKey = `follow_confirmed:${automationId}:${senderId}`;
+        const cooldown = await claimCooldown(dbi, {
+          key: cooldownKey,
+          automationId: auto._id,
+          workspaceId: auto.workspaceId || acct.workspaceId || null,
+          instagramAccountId: auto.instagramAccountId,
+          flow: 'follow-confirmed-cooldown',
+          sourceEventId: senderId,
+          seconds: FOLLOW_RETRY_COOLDOWN_SECONDS,
+          jobId: job.id,
+        });
+        if (!cooldown.claimed) {
+          logAutomation('follow-gate', 'confirmed follow DM skipped by cooldown', {
+            jobId: job.id,
+            automationId,
+            senderId,
+            cooldownSeconds: FOLLOW_RETRY_COOLDOWN_SECONDS,
+          });
+          continue;
+        }
+
         const deliveryKey = `follow:${automationId}:${senderId}:${sourceEventId}`;
         const delivery = await claimAutomationDelivery(dbi, {
           key: deliveryKey,
@@ -779,10 +1007,13 @@ async function processJob(job) {
         rDM = buttons.length > 0
           ? await sendDMButtons(acct.accessToken, { id: senderId }, dmText, buttons)
           : await sendDMText(acct.accessToken, { id: senderId }, dmText);
+        const dmError = graphSendError(rDM, 'Instagram rejected the follow-confirmed DM');
+        if (dmError) throw dmError;
 
         await markDeliverySent(dbi, deliveryKey, { dmResult: rDM, followCheck });
         } catch (e) {
           await markDeliveryFailed(dbi, deliveryKey, e);
+          await pauseAccountForGraphRisk(dbi, acct, e);
           logAutomation('follow-gate', 'send failed after delivery claim', {
             jobId: job.id,
             automationId,
@@ -861,7 +1092,7 @@ async function processJob(job) {
           workspaceId: acct.workspaceId,
           type: 'dm_reply',
           isActive: true,
-        }).toArray();
+        }).sort({ createdAt: 1 }).toArray();
         logAutomation('dm-auto-reply', 'active dm automations loaded', {
           jobId: job.id,
           instagramAccountId: acct._id,
@@ -894,6 +1125,34 @@ async function processJob(job) {
           const reply = replies[Math.floor(Math.random() * replies.length)];
           const replyButtons = (auto.replyButtons || []).filter(b => b.title && b.url).slice(0, 3);
           const sourceEventId = dmSourceEventId(msg, senderId, recipientId, incomingText);
+          const canSend = await assertCanSendForAccount(dbi, acct, 'dm-auto-reply', {
+            jobId: job.id,
+            automationId: auto._id,
+            senderId,
+          });
+          if (!canSend) break;
+
+          const cooldownKey = `dm_cooldown:${auto._id}:${senderId}`;
+          const cooldown = await claimCooldown(dbi, {
+            key: cooldownKey,
+            automationId: auto._id,
+            workspaceId: auto.workspaceId || acct.workspaceId || null,
+            instagramAccountId: auto.instagramAccountId,
+            flow: 'dm-reply-cooldown',
+            sourceEventId: senderId,
+            seconds: DM_COOLDOWN_SECONDS,
+            jobId: job.id,
+          });
+          if (!cooldown.claimed) {
+            logAutomation('dm-auto-reply', 'reply skipped by sender cooldown', {
+              jobId: job.id,
+              automationId: auto._id,
+              senderId,
+              cooldownSeconds: DM_COOLDOWN_SECONDS,
+            });
+            break;
+          }
+
           const deliveryKey = `dm_reply:${auto._id}:${sourceEventId}`;
           const delivery = await claimAutomationDelivery(dbi, {
             key: deliveryKey,
@@ -911,7 +1170,7 @@ async function processJob(job) {
               senderId,
               deliveryKey,
             });
-            continue;
+            break;
           }
 
           let r = null;
@@ -927,9 +1186,12 @@ async function processJob(job) {
             error: graphError(r),
             buttons: replyButtons.length,
           });
+          const dmError = graphSendError(r, 'Instagram rejected the DM auto-reply');
+          if (dmError) throw dmError;
           await markDeliverySent(dbi, deliveryKey, { dmResult: r });
           } catch (e) {
             await markDeliveryFailed(dbi, deliveryKey, e);
+            await pauseAccountForGraphRisk(dbi, acct, e);
             logAutomation('dm-auto-reply', 'send failed after delivery claim', {
               jobId: job.id,
               automationId: auto._id,
@@ -937,7 +1199,7 @@ async function processJob(job) {
               deliveryKey,
               error: e?.message,
             });
-            continue;
+            break;
           }
 
           try {
@@ -983,6 +1245,7 @@ async function processJob(job) {
               error: e?.message,
             });
           }
+          break;
         }
       } else if (!incomingText) {
         logAutomation('dm-auto-reply', 'skipped messaging event without text', {

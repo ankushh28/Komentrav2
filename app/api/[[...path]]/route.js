@@ -53,6 +53,13 @@ async function ensureWorkspaceIndexes(db) {
       ),
       db.collection('instagram_accounts').createIndex({ connectedUserId: 1, workspaceId: 1 }),
       db.collection('automations').createIndex({ userId: 1, workspaceId: 1 }),
+      db.collection('automations').createIndex(
+        { workspaceId: 1, instagramAccountId: 1, type: 1, postId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { type: 'comment_dm', isActive: true, postId: { $exists: true } },
+        },
+      ),
       db.collection('automation_runs').createIndex({ userId: 1, workspaceId: 1, ranAt: -1 }),
       db.collection('audience_members').createIndex({ workspaceId: 1, instagramScopedUserId: 1 }, { unique: true }),
       db.collection('audience_members').createIndex({ userId: 1, workspaceId: 1, lastTriggeredAt: -1 }),
@@ -802,6 +809,10 @@ function normalizeMatchType(matchType) {
   return ['exact', 'contains', 'starts_with'].includes(matchType) ? matchType : 'contains';
 }
 
+function isDuplicateKeyError(error) {
+  return error?.code === 11000;
+}
+
 async function findOwnedInstagramAccount(db, userId, instagramAccountId, workspaceId) {
   if (!instagramAccountId) return null;
   const query = {
@@ -810,6 +821,25 @@ async function findOwnedInstagramAccount(db, userId, instagramAccountId, workspa
   };
   if (workspaceId) query.workspaceId = workspaceId;
   return db.collection('instagram_accounts').findOne(query);
+}
+
+async function findDuplicateCommentAutomation(db, {
+  workspaceId,
+  instagramAccountId,
+  postId,
+  excludeId = null,
+}) {
+  if (!workspaceId || !instagramAccountId || !postId) return null;
+  const query = {
+    workspaceId,
+    instagramAccountId,
+    type: 'comment_dm',
+    postId,
+  };
+  if (excludeId) query._id = { $ne: excludeId };
+  return db.collection('automations').findOne(query, {
+    projection: { _id: 1, name: 1, postId: 1 },
+  });
 }
 
 async function addRunCounts(db, userId, automations, workspaceId = null) {
@@ -879,6 +909,17 @@ async function handleCreateAutomation(req) {
   if (!instagramAccountId || !cleanPostId || cleanKeywords.length === 0 || cleanReplies.length === 0 || !cleanDmText) {
     return json({ error: 'Missing fields. Need at least 1 keyword, 1 reply variant and a DM message.' }, 400);
   }
+  const duplicate = await findDuplicateCommentAutomation(db, {
+    workspaceId: workspace._id,
+    instagramAccountId,
+    postId: cleanPostId,
+  });
+  if (duplicate) {
+    return json({
+      error: 'This post already has a comment automation. Edit the existing automation instead of creating another one.',
+      existingAutomationId: duplicate._id,
+    }, 409);
+  }
   const doc = {
     _id: uuidv4(),
     userId: u.userId,
@@ -904,7 +945,14 @@ async function handleCreateAutomation(req) {
     replyMessage: cleanReplies[0],
     dmMessage: cleanDmText,
   };
-  await db.collection('automations').insertOne(doc);
+  try {
+    await db.collection('automations').insertOne(doc);
+  } catch (e) {
+    if (isDuplicateKeyError(e)) {
+      return json({ error: 'This post already has a comment automation. Edit the existing automation instead.' }, 409);
+    }
+    throw e;
+  }
   return json({ automation: doc });
 }
 
@@ -979,6 +1027,18 @@ async function handleUpdateAutomation(req, id) {
       if (!postId || !dmText) {
         return json({ error: 'Choose a post and add a DM message.' }, 400);
       }
+      const duplicate = await findDuplicateCommentAutomation(db, {
+        workspaceId: workspace._id,
+        instagramAccountId,
+        postId,
+        excludeId: existing._id,
+      });
+      if (duplicate) {
+        return json({
+          error: 'This post already has a comment automation. Edit the existing automation instead of moving this one onto the same post.',
+          existingAutomationId: duplicate._id,
+        }, 409);
+      }
 
       const askToFollow = Object.prototype.hasOwnProperty.call(body, 'askToFollow')
         ? !!body.askToFollow
@@ -1002,8 +1062,30 @@ async function handleUpdateAutomation(req, id) {
     }
   }
 
+  if (!hasSettingsUpdate && body.isActive === true && existing.type === 'comment_dm') {
+    const duplicate = await findDuplicateCommentAutomation(db, {
+      workspaceId: workspace._id,
+      instagramAccountId: existing.instagramAccountId,
+      postId: existing.postId,
+      excludeId: existing._id,
+    });
+    if (duplicate) {
+      return json({
+        error: 'This post already has a comment automation. Disable or edit the existing automation before enabling this one.',
+        existingAutomationId: duplicate._id,
+      }, 409);
+    }
+  }
+
   update.updatedAt = new Date();
-  await db.collection('automations').updateOne({ _id: id, userId: u.userId, workspaceId: workspace._id }, { $set: update });
+  try {
+    await db.collection('automations').updateOne({ _id: id, userId: u.userId, workspaceId: workspace._id }, { $set: update });
+  } catch (e) {
+    if (isDuplicateKeyError(e)) {
+      return json({ error: 'This post already has a comment automation. Edit the existing automation instead.' }, 409);
+    }
+    throw e;
+  }
   const doc = await db.collection('automations').findOne({ _id: id, userId: u.userId, workspaceId: workspace._id });
   const [withCounts] = await addRunCounts(db, u.userId, [doc], workspace._id);
   return json({ automation: withCounts });
@@ -1161,6 +1243,14 @@ function summarizeWebhook(body) {
   };
 }
 
+function stableWebhookJobId(rawBody) {
+  return 'webhook:' + crypto
+    .createHash('sha256')
+    .update(rawBody, 'utf8')
+    .digest('hex')
+    .slice(0, 48);
+}
+
 async function handleWebhookEvent(req) {
   const rawBody = await req.text();
 
@@ -1191,7 +1281,7 @@ async function handleWebhookEvent(req) {
 
   try {
     const q = getQueue();
-    const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const jobId = stableWebhookJobId(rawBody);
     const job = await q.add('event', body, { jobId });
     console.log('[webhook] enqueued event', JSON.stringify({ jobId: job.id, ...summary }));
   } catch (e) {
@@ -1203,7 +1293,7 @@ async function handleWebhookEvent(req) {
 }
 
 function verifyMetaSignature(rawBody, signature) {
-  if (!signature) {
+  if (!signature || !process.env.META_APP_SECRET) {
     return false;
   }
 
@@ -1213,6 +1303,10 @@ function verifyMetaSignature(rawBody, signature) {
       .createHmac('sha256', process.env.META_APP_SECRET)
       .update(rawBody, 'utf8')
       .digest('hex');
+
+  if (Buffer.byteLength(expectedSignature) !== Buffer.byteLength(signature)) {
+    return false;
+  }
 
   return crypto.timingSafeEqual(
     Buffer.from(expectedSignature),
