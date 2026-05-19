@@ -6,10 +6,8 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
   ArrowLeft,
-  AlertTriangle,
   CalendarClock,
   CheckCircle2,
-  Copy,
   CreditCard,
   Crown,
   RefreshCw,
@@ -139,15 +137,6 @@ export default function BillingPage() {
       toast.error(e.message);
     } finally {
       setCheckoutPlan('');
-    }
-  };
-
-  const copyWebhookUrl = async () => {
-    try {
-      await navigator.clipboard.writeText(status.webhookUrl);
-      toast.success('Webhook URL copied');
-    } catch {
-      toast.error('Copy failed. Select the URL manually.');
     }
   };
 
@@ -293,29 +282,6 @@ export default function BillingPage() {
           </Card>
         </section>
 
-        <Card className="border-slate-200 bg-white shadow-sm">
-          <CardContent className="p-5">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Razorpay webhook URL</h2>
-                <p className="mt-1 text-sm text-slate-600">Add this URL in Razorpay Dashboard and subscribe to subscription/payment events.</p>
-              </div>
-              <Button variant="outline" onClick={copyWebhookUrl}>
-                <Copy className="mr-2 h-4 w-4" /> Copy URL
-              </Button>
-            </div>
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-700 break-all">
-              {status.webhookUrl}
-            </div>
-            {!status.razorpayConfigured && (
-              <div className="mt-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <p>Razorpay keys or plan IDs are not configured yet. Checkout will stay disabled until the environment values are filled.</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
         <section>
           <div className="mb-4">
             <h2 className="text-xl font-semibold">Upgrade options</h2>
@@ -362,32 +328,6 @@ export default function BillingPage() {
               </Card>
             ))}
           </div>
-        </section>
-
-        <section>
-          <div className="mb-4">
-            <h2 className="text-xl font-semibold">Recent billing events</h2>
-            <p className="mt-1 text-sm text-slate-600">Webhook-confirmed events from Razorpay.</p>
-          </div>
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardContent className="p-0">
-              {status.billingEvents?.length ? (
-                <div className="divide-y divide-slate-100">
-                  {status.billingEvents.map(event => (
-                    <div key={event.id} className="flex flex-col gap-1 p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="font-medium">{event.event || 'billing.event'}</p>
-                        <p className="text-slate-500">{event.paymentStatus || event.subscriptionStatus || 'received'}</p>
-                      </div>
-                      <p className="text-xs text-slate-500">{formatDate(event.receivedAt)}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="p-5 text-sm text-slate-500">No Razorpay webhook events have been received for this subscription yet.</p>
-              )}
-            </CardContent>
-          </Card>
         </section>
 
         <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600">

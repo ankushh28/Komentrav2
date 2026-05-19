@@ -1530,11 +1530,6 @@ function razorpayTimestamp(value) {
   return value ? new Date(Number(value) * 1000) : null;
 }
 
-function billingWebhookUrl(req) {
-  const base = process.env.NEXT_PUBLIC_BASE_URL || new URL(req.url).origin;
-  return `${base.replace(/\/$/, '')}/api/billing/webhook`;
-}
-
 function configuredRazorpayPlanId(planId) {
   const plan = getPlan(planId);
   return plan.razorpayPlanEnv ? process.env[plan.razorpayPlanEnv] : '';
@@ -1574,11 +1569,7 @@ async function handleBillingStatus(req) {
   const db = await getDb();
   await ensureUserWorkspaces(db, u.userId);
   const status = await getBillingStatus(db, u.userId);
-  return json({
-    ...status,
-    webhookUrl: billingWebhookUrl(req),
-    razorpayConfigured: !!razorpayAuthHeader(),
-  });
+  return json(status);
 }
 
 async function handleBillingCheckout(req) {

@@ -23,7 +23,7 @@ import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
-  Pencil, Settings, Briefcase, Users, Menu, LifeBuoy, CreditCard,
+  Pencil, Settings, Users, Menu, LifeBuoy, CreditCard,
 } from 'lucide-react';
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
@@ -1124,7 +1124,6 @@ export default function DashboardPage() {
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId);
   const workspaceActive = (selectedWorkspace?.status || 'active') === 'active';
   const activeCount = automations.filter(a => a.isActive).length;
-  const selectedUsage = billingStatus?.usage?.workspacesBreakdown?.find(w => w.id === selectedWorkspaceId);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1219,65 +1218,6 @@ export default function DashboardPage() {
           <Button variant="outline" size="icon" onClick={createWorkspace}><Plus className="w-4 h-4" /></Button>
           <Button variant="outline" size="icon" onClick={() => setShowWorkspaceSettings(true)} disabled={!selectedWorkspace}><Settings className="w-4 h-4" /></Button>
         </div>
-        {selectedWorkspace && (
-          <div className="mb-6 flex items-center justify-between gap-3 rounded-lg border bg-white p-4">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="w-10 h-10 shrink-0 rounded-lg bg-slate-100 flex items-center justify-center">
-                <Briefcase className="w-5 h-5 text-slate-700" />
-              </div>
-              <div className="min-w-0">
-                <p className="truncate font-semibold">{selectedWorkspace.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {workspaceActive ? 'Active workspace' : 'Disabled workspace. Enable it before connecting accounts or editing automations.'}
-                </p>
-              </div>
-            </div>
-            {!workspaceActive && <Badge className="bg-slate-100 text-slate-600">Disabled</Badge>}
-          </div>
-        )}
-        {billingStatus?.plan && selectedUsage && (
-          <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="font-semibold">{billingStatus.plan.name} plan</p>
-                <p className="text-xs text-muted-foreground">Monthly usage for this workspace</p>
-              </div>
-              <Button variant="outline" size="sm" onClick={() => router.push('/billing')}>
-                <CreditCard className="w-4 h-4 mr-1" /> Manage plan
-              </Button>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <div className="mb-1 flex justify-between text-xs text-muted-foreground">
-                  <span>Active automations</span>
-                  <span>{selectedUsage.activeAutomations} / {selectedUsage.activeAutomationsLimit}</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div className="h-full bg-slate-950" style={{ width: `${Math.min(100, Math.round((selectedUsage.activeAutomations / Math.max(selectedUsage.activeAutomationsLimit, 1)) * 100))}%` }} />
-                </div>
-              </div>
-              <div>
-                <div className="mb-1 flex justify-between text-xs text-muted-foreground">
-                  <span>Triggers this month</span>
-                  <span>{selectedUsage.triggersUsed.toLocaleString('en-IN')} / {selectedUsage.triggerLimit.toLocaleString('en-IN')}</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div className="h-full bg-slate-950" style={{ width: `${Math.min(100, Math.round((selectedUsage.triggersUsed / Math.max(selectedUsage.triggerLimit, 1)) * 100))}%` }} />
-                </div>
-              </div>
-            </div>
-            {(selectedUsage.triggerUsagePercent >= 80 || selectedUsage.activeAutomations >= selectedUsage.activeAutomationsLimit) && (
-              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                {selectedUsage.activeAutomations >= selectedUsage.activeAutomationsLimit
-                  ? 'This workspace is at its active automation limit. Upgrade or turn off an automation before adding more.'
-                  : 'This workspace has used more than 80% of its monthly trigger limit.'}
-                <Button variant="link" className="ml-1 h-auto p-0 text-amber-900 underline" onClick={() => router.push('/billing')}>
-                  View plans
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
         <div className="grid grid-cols-2 md:grid-cols-2 gap-4 mb-10">
           <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
             <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Total Automations</p><p className="text-3xl font-bold">{automations.length}</p></CardContent>
@@ -1290,9 +1230,11 @@ export default function DashboardPage() {
         <section className="mb-10">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold flex items-center gap-2"><Instagram className="w-5 h-5 text-slate-700" /> Connected Accounts</h2>
-            <Button onClick={connectIG} disabled={connecting || !workspaceActive || accounts.length > 0} className="bg-slate-950 hover:bg-slate-800">
-              <Plus className="w-4 h-4 mr-2" /> {connecting ? 'Redirecting...' : accounts.length > 0 ? 'Account connected' : 'Connect Instagram'}
-            </Button>
+            {accounts.length === 0 && (
+              <Button onClick={connectIG} disabled={connecting || !workspaceActive} className="bg-slate-950 hover:bg-slate-800">
+                <Plus className="w-4 h-4 mr-2" /> {connecting ? 'Redirecting...' : 'Connect Instagram'}
+              </Button>
+            )}
           </div>
           {accounts.length === 0 ? (
             <Card className="border-dashed">
@@ -1305,21 +1247,21 @@ export default function DashboardPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {accounts.map((a) => (
-                <Card key={a.id} className="hover:shadow-lg transition-shadow">
-                  <CardContent className="p-5 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-full bg-slate-950 flex items-center justify-center shadow-md">
+                <Card key={a.id} className="border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md">
+                  <CardContent className="relative p-5">
+                    <div className="flex items-center gap-3 pr-10">
+                      <div className="w-12 h-12 shrink-0 rounded-full bg-slate-950 flex items-center justify-center shadow-md">
                         {a.pfp ? (
                           <img src={a.pfp} alt={a.username} className="w-full h-full object-cover rounded-full" />
                         ) : (
                           <Instagram className="w-6 h-6 text-white" />
                         )}
                       </div>
-                      <div><p className="font-semibold">@{a.username}</p></div>
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold">@{a.username}</p>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="icon" title="Disconnect" disabled={!workspaceActive} onClick={() => disconnectAccount(a.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
-                    </div>
+                    <Button className="absolute right-3 top-3" variant="ghost" size="icon" title="Disconnect" disabled={!workspaceActive} onClick={() => disconnectAccount(a.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
                   </CardContent>
                 </Card>
               ))}
