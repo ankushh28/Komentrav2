@@ -13,6 +13,12 @@ import IORedis from 'ioredis';
 import { MongoClient } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { tryConsumeTriggerQuota } from './lib/entitlements.js';
+import {
+  GRAPH_ERROR_CLASSIFICATIONS,
+  classifyGraphError,
+  normalizeGraphError,
+  shouldPauseAccountForGraphError,
+} from './lib/graph-errors.js';
 
 // Lightweight .env loader (avoids extra dep)
 try {
@@ -67,6 +73,7 @@ function graphSendError(result, fallbackMessage = 'Instagram Graph API send fail
   const error = new Error(result?.data?.error?.message || fallbackMessage);
   error.name = 'GraphSendError';
   error.graph = result?.data?.error || result?.data || null;
+  error.graphClassification = classifyGraphError(error);
   return error;
 }
 
@@ -185,6 +192,15 @@ function graphError(result) {
   return result?.data?.error?.message || result?.data?.error?.code || null;
 }
 
+function graphErrorDetails(resultOrError) {
+  const normalized = normalizeGraphError(resultOrError);
+  if (!normalized.message && !normalized.code && !normalized.type) return null;
+  return {
+    ...normalized,
+    classification: classifyGraphError(resultOrError),
+  };
+}
+
 function isDuplicateKeyError(error) {
   return error?.code === 11000;
 }
@@ -194,6 +210,9 @@ function serializeError(error) {
     message: error?.message || String(error),
     name: error?.name || null,
     graph: error?.graph || null,
+    graphDetails: graphErrorDetails(error),
+    classification: error?.graphClassification || classifyGraphError(error),
+    stage: error?.stage || null,
   };
 }
 
@@ -431,12 +450,7 @@ function accountPauseState(acct) {
 }
 
 function shouldPauseForGraphError(error) {
-  const code = error?.graph?.code;
-  const subcode = error?.graph?.error_subcode;
-  const message = String(error?.message || '').toLowerCase();
-  return [4, 17, 32, 613].includes(Number(code))
-    || ['rate limit', 'too many', 'restricted', 'temporarily blocked'].some(term => message.includes(term))
-    || !!subcode;
+  return shouldPauseAccountForGraphError(error);
 }
 
 async function pauseAccountForGraphRisk(dbi, acct, error) {
@@ -452,6 +466,69 @@ async function pauseAccountForGraphRisk(dbi, acct, error) {
       },
     },
   );
+}
+
+function automationPauseState(auto) {
+  if (auto?.automationPausedUntil && new Date(auto.automationPausedUntil) > new Date()) {
+    return {
+      paused: true,
+      reason: auto.automationPauseReason || 'automation is temporarily paused',
+      pausedUntil: auto.automationPausedUntil,
+    };
+  }
+  return { paused: false };
+}
+
+function logIfAutomationPaused(auto, flow, details = {}) {
+  const pause = automationPauseState(auto);
+  if (!pause.paused) return false;
+  logAutomation(flow, 'send skipped because automation is paused', {
+    automationId: auto?._id || null,
+    reason: pause.reason,
+    pausedUntil: pause.pausedUntil || null,
+    ...details,
+  });
+  return true;
+}
+
+async function pauseAutomationForObjectFailures(dbi, auto, acct, details = {}) {
+  if (!auto?._id || !acct?._id) return false;
+  const windowMinutes = parsePositiveInt(process.env.OBJECT_ERROR_GUARD_WINDOW_MINUTES, 10);
+  const threshold = parsePositiveInt(process.env.OBJECT_ERROR_GUARD_THRESHOLD, 5);
+  const pauseMinutes = parsePositiveInt(process.env.OBJECT_ERROR_AUTOMATION_PAUSE_MINUTES, 15);
+  const since = new Date(Date.now() - windowMinutes * 60 * 1000);
+  const count = await dbi.collection('automation_deliveries').countDocuments({
+    automationId: auto._id,
+    instagramAccountId: acct._id,
+    status: 'send_failed',
+    updatedAt: { $gte: since },
+    $or: [
+      { 'sendError.classification': GRAPH_ERROR_CLASSIFICATIONS.OBJECT_UNAVAILABLE },
+      { 'sendError.graphDetails.classification': GRAPH_ERROR_CLASSIFICATIONS.OBJECT_UNAVAILABLE },
+    ],
+  });
+  if (count < threshold) return false;
+
+  await dbi.collection('automations').updateOne(
+    { _id: auto._id },
+    {
+      $set: {
+        automationPausedUntil: new Date(Date.now() + pauseMinutes * 60 * 1000),
+        automationPauseReason: `${threshold}+ unavailable Instagram comment objects in ${windowMinutes} minutes`,
+        updatedAt: new Date(),
+      },
+    },
+  );
+  logAutomation('comment-dm', 'automation paused by object-unavailable guard', {
+    automationId: auto._id,
+    instagramAccountId: acct._id,
+    count,
+    threshold,
+    windowMinutes,
+    pauseMinutes,
+    ...details,
+  });
+  return true;
 }
 
 async function assertCanSendForAccount(dbi, acct, flow, details = {}) {
@@ -649,6 +726,8 @@ async function processJob(job) {
       const commentText = (v.text || '').toLowerCase();
       const commentId = v.id;
       const mediaId = v.media?.id || v.media_id;
+      const parentId = v.parent_id || null;
+      const mediaProductType = v.media?.media_product_type || v.media_product_type || null;
       const fromId = v.from?.id;
       const fromUsername = v.from?.username || null;
       if (!commentId || !mediaId) {
@@ -663,6 +742,8 @@ async function processJob(job) {
       logAutomation('comment-dm', 'comment event received', {
         jobId: job.id,
         mediaId,
+        parentId,
+        mediaProductType,
         commentId,
         fromId: fromId || null,
         fromUsername,
@@ -744,6 +825,13 @@ async function processJob(job) {
         })) {
           break;
         }
+        if (logIfAutomationPaused(auto, 'comment-dm', {
+          jobId: job.id,
+          instagramAccountId: acct._id,
+          commentId,
+        })) {
+          break;
+        }
 
         const deliveryKey = `comment_dm:${auto._id}:${commentId}`;
         const delivery = await claimAutomationDelivery(dbi, {
@@ -785,16 +873,38 @@ async function processJob(job) {
         const reply = replies[Math.floor(Math.random() * replies.length)];
         let r1 = null;
         let rDM = null;
+        let publicReplyError = null;
         try {
         r1 = await replyToComment(acct.accessToken, commentId, reply);
         logAutomation('comment-dm', 'public reply attempted', {
           jobId: job.id,
           automationId: auto._id,
+          stage: 'public_reply',
           ok: r1.ok,
           error: graphError(r1),
+          graphError: graphErrorDetails(r1),
         });
         const replyError = graphSendError(r1, 'Instagram rejected the public comment reply');
-        if (replyError) throw replyError;
+        if (replyError) {
+          replyError.stage = 'public_reply';
+          const classification = replyError.graphClassification || classifyGraphError(replyError);
+          if (classification === GRAPH_ERROR_CLASSIFICATIONS.OBJECT_UNAVAILABLE) {
+            publicReplyError = replyError;
+            await updateAutomationDelivery(dbi, deliveryKey, {
+              publicReplyFailed: true,
+              publicReplyError: serializeError(replyError),
+            });
+            logAutomation('comment-dm', 'continuing to private reply after public reply object unavailable', {
+              jobId: job.id,
+              automationId: auto._id,
+              deliveryKey,
+              commentId,
+              graphError: graphErrorDetails(replyError),
+            });
+          } else {
+            throw replyError;
+          }
+        }
 
         if (auto.askToFollow) {
           rDM = await sendFollowPrompt(
@@ -812,25 +922,53 @@ async function processJob(job) {
         logAutomation('comment-dm', 'dm attempted', {
           jobId: job.id,
           automationId: auto._id,
+          stage: 'private_reply',
           flow: auto.askToFollow ? 'follow-gated' : 'direct',
           ok: rDM?.ok,
           error: graphError(rDM),
+          graphError: graphErrorDetails(rDM),
         });
           const dmError = graphSendError(rDM, 'Instagram rejected the private reply DM');
-          if (dmError) throw dmError;
-          await markDeliverySent(dbi, deliveryKey, {
-            replyResult: r1,
-            dmResult: rDM,
-            flow: auto.askToFollow ? 'follow-gated' : 'direct',
-          });
+          if (dmError) {
+            dmError.stage = 'private_reply';
+            throw dmError;
+          }
+          if (publicReplyError) {
+            await updateAutomationDelivery(dbi, deliveryKey, {
+              status: 'sent_with_public_reply_failed',
+              sendResult: {
+                replyResult: r1,
+                dmResult: rDM,
+                publicReplyError: serializeError(publicReplyError),
+                flow: auto.askToFollow ? 'follow-gated' : 'direct',
+              },
+              sentAt: new Date(),
+            });
+          } else {
+            await markDeliverySent(dbi, deliveryKey, {
+              replyResult: r1,
+              dmResult: rDM,
+              flow: auto.askToFollow ? 'follow-gated' : 'direct',
+            });
+          }
         } catch (e) {
           await markDeliveryFailed(dbi, deliveryKey, e);
           await pauseAccountForGraphRisk(dbi, acct, e);
+          if ((e?.graphClassification || classifyGraphError(e)) === GRAPH_ERROR_CLASSIFICATIONS.OBJECT_UNAVAILABLE) {
+            await pauseAutomationForObjectFailures(dbi, auto, acct, {
+              jobId: job.id,
+              deliveryKey,
+              commentId,
+              stage: e?.stage || null,
+            });
+          }
           logAutomation('comment-dm', 'send failed after delivery claim', {
             jobId: job.id,
             automationId: auto._id,
             deliveryKey,
+            stage: e?.stage || null,
             error: e?.message,
+            graphError: graphErrorDetails(e),
           });
           break;
         }
@@ -855,6 +993,8 @@ async function processJob(job) {
           commentId, fromUserId: fromId, fromUsername, fromDisplayName: null, commentText: v.text,
           replyUsed: reply, replyResult: r1, dmResult: rDM,
           flow: auto.askToFollow ? 'follow-gated' : 'direct',
+          publicReplyFailed: !!publicReplyError,
+          publicReplyError: publicReplyError ? serializeError(publicReplyError) : null,
           ranAt: new Date(),
         });
         console.log(`[worker] processed comment match for automation ${auto._id}`);

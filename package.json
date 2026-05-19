@@ -8,7 +8,9 @@
         "dev:webpack": "next dev --hostname 0.0.0.0 --port 3000",
         "build": "next build",
         "start": "next start",
-        "migrate:workspaces": "node scripts/migrate-workspaces.mjs"
+        "migrate:workspaces": "node scripts/migrate-workspaces.mjs",
+        "recover:unsupported-object-pause": "node scripts/clear-unsupported-object-pause.mjs",
+        "test": "node --test"
     },
     "dependencies": {
         "@hookform/resolvers": "^5.1.1",

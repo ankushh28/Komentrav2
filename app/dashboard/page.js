@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -23,7 +24,7 @@ import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
-  Pencil, Settings, Users, Menu, LifeBuoy, CreditCard,
+  Pencil, Settings, Users, Menu, LifeBuoy, CreditCard, ChevronDown, Search,
 } from 'lucide-react';
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
@@ -870,6 +871,76 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, disabledActio
   );
 }
 
+function AccountSheet({ account, workspaceName, workspaceActive, connecting, onConnect, onDisconnect }) {
+  const username = account?.username ? `@${account.username}` : 'No account';
+
+  return (
+    <Sheet>
+      <SheetTrigger asChild>
+        <Button
+          variant="ghost"
+          className="h-10 gap-2 rounded-full border border-slate-200 bg-white px-2 shadow-sm hover:bg-slate-50"
+          aria-label="Open Instagram account options"
+        >
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-950">
+            {account?.pfp ? (
+              <img src={account.pfp} alt={account.username || 'Instagram account'} className="h-full w-full object-cover" />
+            ) : (
+              <Instagram className="h-4 w-4 text-white" />
+            )}
+          </span>
+          <ChevronDown className="h-4 w-4 text-slate-500" />
+        </Button>
+      </SheetTrigger>
+      <SheetContent className="w-[88vw] sm:max-w-sm">
+        <SheetHeader>
+          <SheetTitle>Instagram account</SheetTitle>
+          <SheetDescription>{workspaceName || 'Current workspace'}</SheetDescription>
+        </SheetHeader>
+
+        <div className="mt-6 space-y-5">
+          <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-950">
+              {account?.pfp ? (
+                <img src={account.pfp} alt={account.username || 'Instagram account'} className="h-full w-full object-cover" />
+              ) : (
+                <Instagram className="h-6 w-6 text-white" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate font-semibold text-slate-950">{username}</p>
+              <p className="text-xs text-muted-foreground">
+                {account ? 'Connected to this workspace' : 'Connect one account to this workspace'}
+              </p>
+            </div>
+          </div>
+
+          {account ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-start border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+              disabled={!workspaceActive}
+              onClick={() => onDisconnect(account.id)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" /> Remove account
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              className="w-full bg-slate-950 hover:bg-slate-800"
+              disabled={connecting || !workspaceActive}
+              onClick={onConnect}
+            >
+              <Plus className="mr-2 h-4 w-4" /> {connecting ? 'Redirecting...' : 'Connect Instagram'}
+            </Button>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 function WorkspaceSettingsDialog({ open, onOpenChange, workspace, onRename, onStatusChange, onDelete }) {
   const [name, setName] = useState('');
 
@@ -934,6 +1005,8 @@ export default function DashboardPage() {
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [billingStatus, setBillingStatus] = useState(null);
+  const [automationSearch, setAutomationSearch] = useState('');
+  const [automationStatusFilter, setAutomationStatusFilter] = useState('all');
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -1124,6 +1197,28 @@ export default function DashboardPage() {
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId);
   const workspaceActive = (selectedWorkspace?.status || 'active') === 'active';
   const activeCount = automations.filter(a => a.isActive).length;
+  const currentAccount = accounts[0] || null;
+  const normalizedSearch = automationSearch.trim().toLowerCase();
+  const filteredAutomations = automations.filter((a) => {
+    const matchesStatus =
+      automationStatusFilter === 'all' ||
+      (automationStatusFilter === 'active' && a.isActive) ||
+      (automationStatusFilter === 'inactive' && !a.isActive);
+    if (!matchesStatus) return false;
+    if (!normalizedSearch) return true;
+
+    const acct = accounts.find(x => x.id === a.instagramAccountId);
+    const haystack = [
+      a.name,
+      triggerLabel(a),
+      a.type === 'dm_reply' ? 'dm auto reply' : 'comment to dm',
+      a.postPermalink,
+      acct?.username,
+      ...(keywordList(a) || []),
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    return haystack.includes(normalizedSearch);
+  });
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1151,6 +1246,14 @@ export default function DashboardPage() {
                 <Settings className="w-4 h-4" />
               </Button>
             </div>
+            <AccountSheet
+              account={currentAccount}
+              workspaceName={selectedWorkspace?.name}
+              workspaceActive={workspaceActive}
+              connecting={connecting}
+              onConnect={connectIG}
+              onDisconnect={disconnectAccount}
+            />
             <div className="hidden md:flex items-center gap-2 text-sm">
               <div className={`w-2 h-2 rounded-full ${workspaceActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></div>
               <span className="text-muted-foreground">{workspaceActive ? `${activeCount} active` : 'disabled'}</span>
@@ -1227,50 +1330,8 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        <section className="mb-10">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold flex items-center gap-2"><Instagram className="w-5 h-5 text-slate-700" /> Connected Accounts</h2>
-            {accounts.length === 0 && (
-              <Button onClick={connectIG} disabled={connecting || !workspaceActive} className="bg-slate-950 hover:bg-slate-800">
-                <Plus className="w-4 h-4 mr-2" /> {connecting ? 'Redirecting...' : 'Connect Instagram'}
-              </Button>
-            )}
-          </div>
-          {accounts.length === 0 ? (
-            <Card className="border-dashed">
-              <CardContent className="py-12 text-center">
-                <Instagram className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-                <p className="text-muted-foreground mb-4">No Instagram accounts connected yet.</p>
-                <Button onClick={connectIG} disabled={connecting || !workspaceActive} className="bg-slate-950 hover:bg-slate-800">Connect Your First Account</Button>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {accounts.map((a) => (
-                <Card key={a.id} className="border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md">
-                  <CardContent className="relative p-5">
-                    <div className="flex items-center gap-3 pr-10">
-                      <div className="w-12 h-12 shrink-0 rounded-full bg-slate-950 flex items-center justify-center shadow-md">
-                        {a.pfp ? (
-                          <img src={a.pfp} alt={a.username} className="w-full h-full object-cover rounded-full" />
-                        ) : (
-                          <Instagram className="w-6 h-6 text-white" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold">@{a.username}</p>
-                      </div>
-                    </div>
-                    <Button className="absolute right-3 top-3" variant="ghost" size="icon" title="Disconnect" disabled={!workspaceActive} onClick={() => disconnectAccount(a.id)}><Trash2 className="w-4 h-4 text-rose-500" /></Button>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </section>
-
         <section>
-          <div className="flex items-center justify-between mb-4">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-xl font-bold flex items-center gap-2"><Zap className="w-5 h-5 text-amber-500" /> Automations</h2>
             {accounts.length > 0 && (
               <Button disabled={!workspaceActive} onClick={() => setShowTypeChooser(true)} className="bg-slate-950 hover:bg-slate-800">
@@ -1283,7 +1344,10 @@ export default function DashboardPage() {
             <Card className="border-dashed">
               <CardContent className="py-12 text-center">
                 <Sparkles className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-                <p className="text-muted-foreground">Connect an Instagram account first to start creating automations.</p>
+                <p className="text-muted-foreground mb-4">Connect an Instagram account first to start creating automations.</p>
+                <Button onClick={connectIG} disabled={connecting || !workspaceActive} className="bg-slate-950 hover:bg-slate-800">
+                  <Plus className="w-4 h-4 mr-2" /> {connecting ? 'Redirecting...' : 'Connect Instagram'}
+                </Button>
               </CardContent>
             </Card>
           ) : (
@@ -1296,9 +1360,59 @@ export default function DashboardPage() {
                   </CardContent>
                 </Card>
               ) : (
-                <div className="space-y-3">
-                  {automations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} disabledActions={!workspaceActive} />)}
-                </div>
+                <>
+                  <div className="mb-4 flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm md:flex-row md:items-center md:justify-between">
+                    <div className="relative min-w-0 flex-1">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        value={automationSearch}
+                        onChange={(e) => setAutomationSearch(e.target.value)}
+                        placeholder="Search automations, keywords, posts"
+                        className="h-10 pl-9 pr-9"
+                      />
+                      {automationSearch && (
+                        <button
+                          type="button"
+                          aria-label="Clear automation search"
+                          onClick={() => setAutomationSearch('')}
+                          className="absolute right-2 top-1/2 rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 -translate-y-1/2"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid h-10 grid-cols-3 rounded-lg bg-slate-100 p-1 text-sm font-medium text-slate-600 md:w-72">
+                      {[
+                        ['all', 'All'],
+                        ['active', 'Active'],
+                        ['inactive', 'Inactive'],
+                      ].map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setAutomationStatusFilter(value)}
+                          className={`rounded-md px-3 transition ${automationStatusFilter === value ? 'bg-white text-slate-950 shadow-sm' : 'hover:text-slate-950'}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {filteredAutomations.length === 0 ? (
+                    <Card className="border-dashed bg-white">
+                      <CardContent className="py-10 text-center">
+                        <Search className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
+                        <p className="font-medium text-slate-700">No automations match your filters.</p>
+                        <p className="text-sm text-muted-foreground">Try another search or switch the status filter.</p>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredAutomations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} disabledActions={!workspaceActive} />)}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
