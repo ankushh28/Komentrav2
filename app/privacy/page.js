@@ -82,7 +82,7 @@ const sections = [
 
 export default function PrivacyPage() {
   return (
-    <main className="min-h-screen bg-white text-slate-950">
+    <main className="flex min-h-screen flex-col bg-white text-slate-950">
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="container mx-auto flex items-center justify-between gap-4 px-4 py-3">
           <Link href="/" className="flex items-center gap-2">

@@ -80,7 +80,7 @@ export default function AnalyticsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="flex min-h-screen flex-col bg-slate-50">
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur sticky top-0 z-20">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -112,7 +112,7 @@ export default function AnalyticsPage() {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8 max-w-6xl space-y-8">
+      <main className="container mx-auto max-w-6xl flex-1 px-4 py-8 space-y-8">
         <div className="sm:hidden flex items-center gap-2">
           <Select value={selectedWorkspaceId} onValueChange={selectWorkspace}>
             <SelectTrigger className="flex-1 bg-white">
@@ -325,7 +325,7 @@ export default function AnalyticsPage() {
         </Card>
       </main>
 
-      <footer className="border-t bg-white/80">
+      <footer className="mt-auto border-t bg-white/80">
         <div className="container mx-auto flex flex-col gap-3 px-4 py-5 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Copyright {new Date().getFullYear()} Komentra.</p>
           <div className="flex flex-wrap items-center gap-4">

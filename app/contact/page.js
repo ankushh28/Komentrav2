@@ -23,7 +23,7 @@ export const metadata = {
 
 export default function ContactPage() {
   return (
-    <main className="min-h-screen bg-white text-slate-950">
+    <main className="flex min-h-screen flex-col bg-white text-slate-950">
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="container mx-auto flex items-center justify-between gap-4 px-4 py-3">
           <Link href="/" className="flex items-center gap-2">
@@ -39,7 +39,7 @@ export default function ContactPage() {
         </div>
       </header>
 
-      <section className="border-b border-slate-200 bg-slate-50">
+      <section className="flex-1 border-b border-slate-200 bg-slate-50">
         <div className="container mx-auto grid max-w-6xl gap-10 px-4 py-14 lg:grid-cols-[0.85fr_1.15fr] lg:py-20">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-medium text-slate-700">

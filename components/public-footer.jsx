@@ -22,7 +22,7 @@ export function PublicFooter({ compact = false }) {
 
   if (compact) {
     return (
-      <footer className="border-t bg-white">
+      <footer className="mt-auto border-t bg-white">
         <div className="container mx-auto flex flex-col gap-3 px-4 py-5 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
           <p>Copyright {year} Komentra. All rights reserved.</p>
           <div className="flex flex-wrap items-center gap-4">
@@ -35,7 +35,7 @@ export function PublicFooter({ compact = false }) {
   }
 
   return (
-    <footer className="border-t bg-slate-950 text-white">
+    <footer className="mt-auto border-t bg-slate-950 text-white">
       <div className="container mx-auto grid gap-10 px-4 py-12 md:grid-cols-[1.3fr_0.7fr_0.7fr]">
         <div className="max-w-sm">
           <Link href="/" className="inline-flex items-center gap-2">
