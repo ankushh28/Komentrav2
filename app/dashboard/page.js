@@ -25,7 +25,7 @@ import {
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
   Pencil, Settings, Users, Menu, LifeBuoy, CreditCard, ChevronDown, Search,
-  RefreshCw,
+  RefreshCw, ImageOff,
 } from 'lucide-react';
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
@@ -51,6 +51,31 @@ function keywordList(a) {
 
 function runLabel(count = 0) {
   return `${count} ${count === 1 ? 'run' : 'runs'}`;
+}
+
+function mediaPreviewSrc(media) {
+  if (!media) return null;
+  if (media.thumbnail_url) return media.thumbnail_url;
+  if (media.media_type !== 'VIDEO' && media.media_url) return media.media_url;
+  return null;
+}
+
+function MediaPreview({ src, alt = '', className = '' }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (!src || failed) {
+    return (
+      <div className={`${className} flex items-center justify-center bg-slate-100 text-slate-400`}>
+        <ImageOff className="h-5 w-5" />
+      </div>
+    );
+  }
+
+  return <img src={src} alt={alt} className={className} loading="lazy" onError={() => setFailed(true)} />;
 }
 
 function triggerLabel(a) {
@@ -171,7 +196,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
         body: JSON.stringify({
           instagramAccountId: selectedAccount,
           postId: selectedPost.id, postPermalink: selectedPost.permalink,
-          postThumbnail: selectedPost.thumbnail_url || selectedPost.media_url,
+          postThumbnail: mediaPreviewSrc(selectedPost),
           name: name.trim() || keywords[0],
           keywords, matchType, replyMessages: validReplies,
           dmText: dmText.trim(), dmButtons: validButtons,
@@ -234,7 +259,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                     {media.map((m) => (
                       <button key={m.id} onClick={() => setSelectedPost(m)}
                         className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-slate-950 ring-2 ring-slate-300' : 'border-transparent hover:border-slate-300'}`}>
-                        <img src={m.thumbnail_url || m.media_url} alt="" className="w-full h-full object-cover" />
+                        <MediaPreview src={mediaPreviewSrc(m)} className="w-full h-full object-cover" />
                         {selectedPost?.id === m.id && <div className="absolute inset-0 bg-slate-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
                       </button>
                     ))}
@@ -623,7 +648,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
       } else {
         payload.postId = selectedPost.id;
         payload.postPermalink = selectedPost.permalink || null;
-        payload.postThumbnail = selectedPost.thumbnail_url || selectedPost.media_url || null;
+        payload.postThumbnail = mediaPreviewSrc(selectedPost);
         payload.dmText = dmText.trim();
         payload.dmButtons = validButtons;
         payload.askToFollow = askToFollow;
@@ -693,7 +718,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
                     {media.map((m) => (
                       <button key={m.id} onClick={() => setSelectedPost(m)}
                         className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-slate-950 ring-2 ring-slate-300' : 'border-transparent hover:border-slate-300'}`}>
-                        <img src={m.thumbnail_url || m.media_url} alt="" className="w-full h-full object-cover" />
+                        <MediaPreview src={mediaPreviewSrc(m)} className="w-full h-full object-cover" />
                         {selectedPost?.id === m.id && <div className="absolute inset-0 bg-slate-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
                       </button>
                     ))}
@@ -829,7 +854,7 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, disabledActio
       <CardContent className="p-5">
         <div className="flex items-start gap-4">
           {!isDmReply && a.postThumbnail ? (
-            <img src={a.postThumbnail} alt="" className="w-24 h-24 rounded-xl object-cover flex-shrink-0 ring-2 ring-slate-100" />
+            <MediaPreview src={a.postThumbnail} className="w-24 h-24 rounded-xl object-cover flex-shrink-0 ring-2 ring-slate-100" />
           ) : (
             <div className={`w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0 ${isDmReply ? 'bg-slate-100' : 'bg-slate-100'}`}>
               <TypeIcon className={`w-7 h-7 ${isDmReply ? 'text-sky-700' : 'text-slate-700'}`} />

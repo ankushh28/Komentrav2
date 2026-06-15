@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Activity, Bot, ArrowLeft, BarChart3, Zap, MessageSquare, Send, ShieldCheck,
-  TrendingUp, UserCheck, Hash, Clock, Briefcase,
+  TrendingUp, UserCheck, Hash, Clock, Briefcase, ImageOff,
 } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -40,6 +40,24 @@ function FlowBadge({ flow }) {
   };
   const { label, cls } = map[flow] || { label: flow, cls: 'bg-slate-100 text-slate-700' };
   return <Badge className={`${cls} text-[10px]`}>{label}</Badge>;
+}
+
+function Thumb({ src }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (!src || failed) {
+    return (
+      <div className="w-9 h-9 rounded-md bg-slate-100 text-slate-400 flex items-center justify-center">
+        <ImageOff className="w-4 h-4" />
+      </div>
+    );
+  }
+
+  return <img src={src} alt="" className="w-9 h-9 rounded-md object-cover" loading="lazy" onError={() => setFailed(true)} />;
 }
 
 export default function AnalyticsPage() {
@@ -266,7 +284,7 @@ export default function AnalyticsPage() {
                           <Badge variant="outline" className="text-[10px]">{a.workspaceName || 'Workspace'}</Badge>
                         </td>
                         <td className="py-3 flex items-center gap-2">
-                          {a.thumb && <img src={a.thumb} alt="" className="w-9 h-9 rounded-md object-cover" />}
+                          <Thumb src={a.thumb} />
                           <span className="font-medium truncate max-w-[160px]">{a.name}</span>
                         </td>
                         <td className="py-3">

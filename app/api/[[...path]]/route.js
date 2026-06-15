@@ -814,6 +814,61 @@ async function handleListMedia(req) {
   }
 }
 
+function mediaPreviewUrl(media) {
+  if (!media) return null;
+  if (media.thumbnail_url) return media.thumbnail_url;
+  if (media.media_type !== 'VIDEO' && media.media_url) return media.media_url;
+  return null;
+}
+
+async function fetchInstagramMediaPreview(account, postId) {
+  if (!account?.accessToken || !postId) return null;
+  const url = `https://graph.instagram.com/${API_VERSION}/${encodeURIComponent(postId)}?fields=id,media_type,media_url,thumbnail_url,permalink&access_token=${encodeURIComponent(account.accessToken)}`;
+  const res = await fetch(url);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    console.warn('[instagram] media preview refresh failed', {
+      postId,
+      status: res.status,
+      message: data?.error?.message,
+    });
+    return null;
+  }
+  return {
+    permalink: data.permalink || null,
+    thumbnail: mediaPreviewUrl(data),
+  };
+}
+
+async function refreshAutomationMediaPreviews(db, userId, automations, workspaceId = null) {
+  const accountQuery = { connectedUserId: userId };
+  if (workspaceId) accountQuery.workspaceId = workspaceId;
+  const accounts = await db.collection('instagram_accounts').find(accountQuery).toArray();
+  const accountById = new Map(accounts.map(account => [account._id, account]));
+
+  return Promise.all(automations.map(async (automation) => {
+    if (automation.type === 'dm_reply' || !automation.postId) return automation;
+    const preview = await fetchInstagramMediaPreview(accountById.get(automation.instagramAccountId), automation.postId);
+    if (!preview?.thumbnail) return automation;
+    const permalinkUpdate = preview.permalink && preview.permalink !== automation.postPermalink
+      ? { postPermalink: preview.permalink }
+      : {};
+
+    if (preview.thumbnail !== automation.postThumbnail || Object.keys(permalinkUpdate).length > 0) {
+      db.collection('automations').updateOne(
+        { _id: automation._id, userId, ...(automation.workspaceId ? { workspaceId: automation.workspaceId } : {}) },
+        { $set: { postThumbnail: preview.thumbnail, ...permalinkUpdate } }
+      ).catch(e => console.warn('[instagram] failed to save refreshed media preview', e?.message));
+    }
+
+    return {
+      ...automation,
+      postThumbnail: preview.thumbnail,
+      postPermalink: preview.permalink || automation.postPermalink,
+    };
+  }));
+}
+
 // Helper to remove surrounding quotes from keywords (handles JSON-encoded strings)
 function stripQuotes(str) {
   let s = String(str || '').trim();
@@ -1007,7 +1062,8 @@ async function handleListAutomations(req) {
   const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId);
   if (error) return error;
   const list = await db.collection('automations').find({ userId: u.userId, workspaceId: workspace._id }).sort({ createdAt: -1 }).toArray();
-  return json({ automations: await addRunCounts(db, u.userId, list, workspace._id) });
+  const refreshedList = await refreshAutomationMediaPreviews(db, u.userId, list, workspace._id);
+  return json({ automations: await addRunCounts(db, u.userId, refreshedList, workspace._id) });
 }
 
 async function handleUpdateAutomation(req, id) {
@@ -1376,7 +1432,11 @@ async function handleAnalytics(req) {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
   const allRuns = await db.collection('automation_runs').find({ userId: u.userId, ranAt: { $gte: since } }).toArray();
   const recent = allRuns.filter(r => r.ranAt && new Date(r.ranAt) >= since);
-  const automations = await db.collection('automations').find({ userId: u.userId }).toArray();
+  const automations = await refreshAutomationMediaPreviews(
+    db,
+    u.userId,
+    await db.collection('automations').find({ userId: u.userId }).toArray()
+  );
   const accounts = await db.collection('instagram_accounts').find({ connectedUserId: u.userId }).toArray();
 
   // Daily timeline for the plan lookback window
