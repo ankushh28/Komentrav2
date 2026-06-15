@@ -78,6 +78,30 @@ function MediaPreview({ src, alt = '', className = '' }) {
   return <img src={src} alt={alt} className={className} loading="lazy" onError={() => setFailed(true)} />;
 }
 
+function PostPickerGrid({ media, selectedPost, onSelect }) {
+  return (
+    <div className="max-h-72 overflow-y-auto overscroll-contain rounded-lg border border-slate-200 bg-white p-2 pr-1">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-2 pr-1">
+        {media.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => onSelect(m)}
+            className={`relative block aspect-square w-full min-w-0 overflow-hidden rounded-lg border-2 transition ${selectedPost?.id === m.id ? 'border-slate-950 ring-2 ring-slate-300' : 'border-transparent hover:border-slate-300'}`}
+          >
+            <MediaPreview src={mediaPreviewSrc(m)} className="h-full w-full object-cover" />
+            {selectedPost?.id === m.id && (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-500/40">
+                <CheckCircle2 className="h-7 w-7 text-white" />
+              </div>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function triggerLabel(a) {
   return a?.type === 'dm_reply' ? 'When user sends DM' : 'When user comments';
 }
@@ -255,15 +279,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                 {loadingMedia ? <p className="text-sm text-muted-foreground">Loading posts...</p>
                 : media.length === 0 ? <p className="text-sm text-muted-foreground">No posts found.</p>
                 : (
-                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-h-64 overflow-y-auto p-1">
-                    {media.map((m) => (
-                      <button key={m.id} onClick={() => setSelectedPost(m)}
-                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-slate-950 ring-2 ring-slate-300' : 'border-transparent hover:border-slate-300'}`}>
-                        <MediaPreview src={mediaPreviewSrc(m)} className="w-full h-full object-cover" />
-                        {selectedPost?.id === m.id && <div className="absolute inset-0 bg-slate-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
-                      </button>
-                    ))}
-                  </div>
+                  <PostPickerGrid media={media} selectedPost={selectedPost} onSelect={setSelectedPost} />
                 )}
               </div>
             </div>
@@ -714,15 +730,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
                 {loadingMedia ? <p className="text-sm text-muted-foreground">Loading posts...</p>
                 : media.length === 0 ? <p className="text-sm text-muted-foreground">No posts found.</p>
                 : (
-                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-h-64 overflow-y-auto p-1">
-                    {media.map((m) => (
-                      <button key={m.id} onClick={() => setSelectedPost(m)}
-                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition ${selectedPost?.id === m.id ? 'border-slate-950 ring-2 ring-slate-300' : 'border-transparent hover:border-slate-300'}`}>
-                        <MediaPreview src={mediaPreviewSrc(m)} className="w-full h-full object-cover" />
-                        {selectedPost?.id === m.id && <div className="absolute inset-0 bg-slate-500/40 flex items-center justify-center"><CheckCircle2 className="w-7 h-7 text-white" /></div>}
-                      </button>
-                    ))}
-                  </div>
+                  <PostPickerGrid media={media} selectedPost={selectedPost} onSelect={setSelectedPost} />
                 )}
               </div>
             </div>
