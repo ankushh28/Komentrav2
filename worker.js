@@ -19,6 +19,12 @@ import {
   normalizeGraphError,
   shouldPauseAccountForGraphError,
 } from './lib/graph-errors.js';
+import {
+  META_RATE_LIMIT_STATES,
+  classifyMetaRateLimitUsage,
+  getMetaRateLimitPauseUntil,
+  parseMetaRateLimitHeaders,
+} from './lib/meta-rate-limit.js';
 
 // Lightweight .env loader (avoids extra dep)
 try {
@@ -45,6 +51,14 @@ const FOLLOW_RETRY_COOLDOWN_SECONDS = parsePositiveInt(
 const ACCOUNT_SEND_LIMIT_PER_HOUR = parsePositiveInt(
   process.env.META_ACCOUNT_SEND_LIMIT_PER_HOUR,
   50,
+);
+const META_RATE_LIMIT_WARN_PERCENT = parsePositiveInt(
+  process.env.META_RATE_LIMIT_WARN_PERCENT,
+  80,
+);
+const META_RATE_LIMIT_NEAR_PAUSE_MINUTES = parsePositiveInt(
+  process.env.META_RATE_LIMIT_NEAR_PAUSE_MINUTES,
+  10,
 );
 
 const redis = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
@@ -74,30 +88,38 @@ function graphSendError(result, fallbackMessage = 'Instagram Graph API send fail
   error.name = 'GraphSendError';
   error.graph = result?.data?.error || result?.data || null;
   error.graphClassification = classifyGraphError(error);
+  error.rateLimit = result?.rateLimit || null;
   return error;
 }
 
 // ---- Instagram API helpers ----
+async function graphJson(url, options) {
+  const r = await fetch(url, options);
+  return {
+    ok: r.ok,
+    data: await r.json(),
+    rateLimit: parseMetaRateLimitHeaders(r.headers),
+  };
+}
+
 async function replyToComment(accessToken, commentId, message) {
   const url = `https://graph.instagram.com/${API_VERSION}/${commentId}/replies`;
   const form = new URLSearchParams();
   form.set('message', message);
   form.set('access_token', accessToken);
-  const r = await fetch(url, { method: 'POST', body: form });
-  return { ok: r.ok, data: await r.json() };
+  return graphJson(url, { method: 'POST', body: form });
 }
 async function sendDMText(accessToken, recipient, message) {
   const url = `https://graph.instagram.com/v22.0/me/messages?access_token=${encodeURIComponent(accessToken)}`;
-  const r = await fetch(url, {
+  return graphJson(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ recipient, message: { text: message } }),
   });
-  return { ok: r.ok, data: await r.json() };
 }
 async function sendDMButtons(accessToken, recipient, text, buttons) {
   const url = `https://graph.instagram.com/v22.0/me/messages?access_token=${encodeURIComponent(accessToken)}`;
-  const r = await fetch(url, {
+  return graphJson(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -114,7 +136,6 @@ async function sendDMButtons(accessToken, recipient, text, buttons) {
       },
     }),
   });
-  return { ok: r.ok, data: await r.json() };
 }
 
 
@@ -125,7 +146,7 @@ async function sendFollowPrompt(accessToken, recipient, text, buttonTitle, autom
     buttons.push({ type: 'web_url', url: `https://instagram.com/${igUsername}`, title: `Open @${igUsername}` });
   }
   buttons.push({ type: 'postback', title: buttonTitle || 'I Followed ✓', payload: `RP_FOLLOW:${automationId}` });
-  const r = await fetch(url, {
+  return graphJson(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -133,23 +154,20 @@ async function sendFollowPrompt(accessToken, recipient, text, buttonTitle, autom
       message: { attachment: { type: 'template', payload: { template_type: 'button', text, buttons } } },
     }),
   });
-  return { ok: r.ok, data: await r.json() };
 }
 async function checkUserFollowsBusiness(accessToken, igsid) {
   const url = `https://graph.instagram.com/v22.0/${igsid}?fields=is_user_follow_business,follower_count,name,username&access_token=${encodeURIComponent(accessToken)}`;
   try {
-    const r = await fetch(url);
-    const d = await r.json();
-    return { ok: r.ok, isFollowing: d.is_user_follow_business === true, raw: d };
+    const r = await graphJson(url);
+    return { ok: r.ok, isFollowing: r.data.is_user_follow_business === true, raw: r.data, rateLimit: r.rateLimit };
   } catch (e) { return { ok: false, isFollowing: false, error: e.message }; }
 }
 
 async function getUserProfile(accessToken, igsid) {
   const url = `https://graph.instagram.com/v22.0/${igsid}?fields=name,username&access_token=${encodeURIComponent(accessToken)}`;
   try {
-    const r = await fetch(url);
-    const d = await r.json();
-    return { ok: r.ok, username: d.username || null, displayName: d.name || null, raw: d };
+    const r = await graphJson(url);
+    return { ok: r.ok, username: r.data.username || null, displayName: r.data.name || null, raw: r.data, rateLimit: r.rateLimit };
   } catch (e) {
     return { ok: false, username: null, displayName: null, error: e.message };
   }
@@ -199,6 +217,21 @@ function graphErrorDetails(resultOrError) {
     ...normalized,
     classification: classifyGraphError(resultOrError),
   };
+}
+
+function metaRateLimitThresholds() {
+  return {
+    nearLimitPercent: META_RATE_LIMIT_WARN_PERCENT,
+    limitedPercent: 100,
+  };
+}
+
+function metaRateLimitReason(usage, state) {
+  const metric = usage?.highestMetric || 'usage';
+  const value = usage?.highestUsage ?? usage?.[metric] ?? 'unknown';
+  return state === META_RATE_LIMIT_STATES.LIMITED
+    ? `Meta Graph API rate limit reached: ${metric}=${value}`
+    : `Meta Graph API rate limit near threshold: ${metric}=${value}`;
 }
 
 function isDuplicateKeyError(error) {
@@ -439,6 +472,13 @@ function accountPauseState(acct) {
   if (envFlag('AUTOMATIONS_PAUSED')) {
     return { paused: true, reason: 'global env AUTOMATIONS_PAUSED is enabled' };
   }
+  if (acct?.metaRateLimitPausedUntil && new Date(acct.metaRateLimitPausedUntil) > new Date()) {
+    return {
+      paused: true,
+      reason: acct.metaRateLimitPauseReason || 'Meta Graph API rate limit pause is active',
+      pausedUntil: acct.metaRateLimitPausedUntil,
+    };
+  }
   if (acct?.automationPausedUntil && new Date(acct.automationPausedUntil) > new Date()) {
     return {
       paused: true,
@@ -455,17 +495,73 @@ function shouldPauseForGraphError(error) {
 
 async function pauseAccountForGraphRisk(dbi, acct, error) {
   if (!acct?._id || !shouldPauseForGraphError(error)) return;
-  const minutes = parsePositiveInt(process.env.GRAPH_ERROR_PAUSE_MINUTES, 60);
+  const fallbackMinutes = parsePositiveInt(process.env.GRAPH_ERROR_PAUSE_MINUTES, 60);
+  const rateLimit = error?.rateLimit || null;
+  const pausedUntil = getMetaRateLimitPauseUntil(rateLimit, fallbackMinutes);
+  const reason = rateLimit
+    ? metaRateLimitReason({
+        ...rateLimit,
+        highestMetric: rateLimit.highestMetric,
+        highestUsage: rateLimit.highestUsage,
+      }, META_RATE_LIMIT_STATES.LIMITED)
+    : (error?.message || 'Instagram Graph API rejected automation send');
   await dbi.collection('instagram_accounts').updateOne(
     { _id: acct._id },
     {
       $set: {
-        automationPausedUntil: new Date(Date.now() + minutes * 60 * 1000),
-        automationPauseReason: error?.message || 'Instagram Graph API rejected automation send',
+        automationPausedUntil: pausedUntil,
+        automationPauseReason: reason,
+        metaRateLimitPausedUntil: pausedUntil,
+        metaRateLimitPauseReason: reason,
         updatedAt: new Date(),
       },
     },
   );
+  acct.automationPausedUntil = pausedUntil;
+  acct.automationPauseReason = reason;
+  acct.metaRateLimitPausedUntil = pausedUntil;
+  acct.metaRateLimitPauseReason = reason;
+}
+
+async function recordMetaRateLimitUsage(dbi, acct, result, flow, details = {}) {
+  const rateLimit = result?.rateLimit;
+  if (!acct?._id || !rateLimit) return;
+
+  const state = classifyMetaRateLimitUsage(rateLimit, metaRateLimitThresholds());
+  const observedAt = new Date();
+  const usage = { ...rateLimit, state };
+  const set = {
+    metaRateLimitUsage: usage,
+    metaRateLimitObservedAt: observedAt,
+    updatedAt: observedAt,
+  };
+
+  if (state !== META_RATE_LIMIT_STATES.NORMAL) {
+    const fallbackMinutes = state === META_RATE_LIMIT_STATES.NEAR_LIMIT
+      ? META_RATE_LIMIT_NEAR_PAUSE_MINUTES
+      : parsePositiveInt(process.env.GRAPH_ERROR_PAUSE_MINUTES, 60);
+    const pausedUntil = getMetaRateLimitPauseUntil(rateLimit, fallbackMinutes);
+    const reason = metaRateLimitReason(rateLimit, state);
+    set.automationPausedUntil = pausedUntil;
+    set.automationPauseReason = reason;
+    set.metaRateLimitPausedUntil = pausedUntil;
+    set.metaRateLimitPauseReason = reason;
+
+    logAutomation(flow, 'account paused by Meta rate-limit header', {
+      instagramAccountId: acct._id,
+      state,
+      reason,
+      pausedUntil,
+      rateLimit: usage,
+      ...details,
+    });
+  }
+
+  await dbi.collection('instagram_accounts').updateOne(
+    { _id: acct._id },
+    { $set: set },
+  );
+  Object.assign(acct, set);
 }
 
 function automationPauseState(auto) {
@@ -876,6 +972,12 @@ async function processJob(job) {
         let publicReplyError = null;
         try {
         r1 = await replyToComment(acct.accessToken, commentId, reply);
+        await recordMetaRateLimitUsage(dbi, acct, r1, 'comment-dm', {
+          jobId: job.id,
+          automationId: auto._id,
+          stage: 'public_reply',
+          commentId,
+        });
         logAutomation('comment-dm', 'public reply attempted', {
           jobId: job.id,
           automationId: auto._id,
@@ -919,6 +1021,12 @@ async function processJob(job) {
             ? await sendDMButtons(acct.accessToken, { comment_id: commentId }, dmText, buttons)
             : await sendDMText(acct.accessToken, { comment_id: commentId }, dmText);
         }
+        await recordMetaRateLimitUsage(dbi, acct, rDM, 'comment-dm', {
+          jobId: job.id,
+          automationId: auto._id,
+          stage: 'private_reply',
+          commentId,
+        });
         logAutomation('comment-dm', 'dm attempted', {
           jobId: job.id,
           automationId: auto._id,
@@ -1068,6 +1176,12 @@ async function processJob(job) {
         }
 
         const followCheck = await checkUserFollowsBusiness(acct.accessToken, senderId);
+        await recordMetaRateLimitUsage(dbi, acct, followCheck, 'follow-gate', {
+          jobId: job.id,
+          automationId,
+          senderId,
+          stage: 'follow_check',
+        });
         logAutomation('follow-gate', 'follow check completed', {
           jobId: job.id,
           automationId,
@@ -1150,6 +1264,12 @@ async function processJob(job) {
             `Almost there! 🙏 We don't see your follow yet. Please follow @${acct.username} first, then tap below.`,
             auto.followButtonText || 'I Followed ✓', auto._id, acct.username,
           );
+          await recordMetaRateLimitUsage(dbi, acct, retry, 'follow-gate', {
+            jobId: job.id,
+            automationId,
+            senderId,
+            stage: 'follow_retry_prompt',
+          });
           const retryError = graphSendError(retry, 'Instagram rejected the follow retry prompt');
           if (retryError) throw retryError;
           await markDeliverySent(dbi, deliveryKey, { retryResult: retry, followCheck });
@@ -1249,6 +1369,12 @@ async function processJob(job) {
         rDM = buttons.length > 0
           ? await sendDMButtons(acct.accessToken, { id: senderId }, dmText, buttons)
           : await sendDMText(acct.accessToken, { id: senderId }, dmText);
+        await recordMetaRateLimitUsage(dbi, acct, rDM, 'follow-gate', {
+          jobId: job.id,
+          automationId,
+          senderId,
+          stage: 'follow_confirmed_dm',
+        });
         const dmError = graphSendError(rDM, 'Instagram rejected the follow-confirmed DM');
         if (dmError) throw dmError;
 
@@ -1431,6 +1557,12 @@ async function processJob(job) {
           r = replyButtons.length > 0
             ? await sendDMButtons(acct.accessToken, { id: senderId }, reply, replyButtons)
             : await sendDMText(acct.accessToken, { id: senderId }, reply);
+        await recordMetaRateLimitUsage(dbi, acct, r, 'dm-auto-reply', {
+          jobId: job.id,
+          automationId: auto._id,
+          senderId,
+          stage: 'dm_auto_reply',
+        });
         logAutomation('dm-auto-reply', 'reply send attempted', {
           jobId: job.id,
           automationId: auto._id,
@@ -1457,6 +1589,12 @@ async function processJob(job) {
 
           try {
           const profile = await getUserProfile(acct.accessToken, senderId);
+          await recordMetaRateLimitUsage(dbi, acct, profile, 'dm-auto-reply', {
+            jobId: job.id,
+            automationId: auto._id,
+            senderId,
+            stage: 'user_profile',
+          });
           const audienceMember = await upsertAudienceMember(dbi, {
             auto,
             acct,

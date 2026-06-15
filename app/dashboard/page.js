@@ -25,6 +25,7 @@ import {
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
   Pencil, Settings, Users, Menu, LifeBuoy, CreditCard, ChevronDown, Search,
+  RefreshCw,
 } from 'lucide-react';
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
@@ -871,7 +872,7 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, disabledActio
   );
 }
 
-function AccountSheet({ account, workspaceName, workspaceActive, connecting, onConnect, onDisconnect }) {
+function AccountSheet({ account, workspaceName, workspaceActive, connecting, resubscribing, onConnect, onDisconnect, onResubscribe }) {
   const username = account?.username ? `@${account.username}` : 'No account';
 
   return (
@@ -916,15 +917,27 @@ function AccountSheet({ account, workspaceName, workspaceActive, connecting, onC
           </div>
 
           {account ? (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full justify-start border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
-              disabled={!workspaceActive}
-              onClick={() => onDisconnect(account.id)}
-            >
-              <Trash2 className="mr-2 h-4 w-4" /> Remove account
-            </Button>
+            <div className="space-y-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-start border-slate-200 text-slate-700 hover:bg-slate-50"
+                disabled={!workspaceActive || resubscribing}
+                onClick={() => onResubscribe(account.id)}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${resubscribing ? 'animate-spin' : ''}`} />
+                {resubscribing ? 'Re-subscribing...' : 'Re-subscribe webhook'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-start border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                disabled={!workspaceActive}
+                onClick={() => onDisconnect(account.id)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" /> Remove account
+              </Button>
+            </div>
           ) : (
             <Button
               type="button"
@@ -1004,6 +1017,7 @@ export default function DashboardPage() {
   const [editingAutomation, setEditingAutomation] = useState(null);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [resubscribingAccountId, setResubscribingAccountId] = useState('');
   const [billingStatus, setBillingStatus] = useState(null);
   const [automationSearch, setAutomationSearch] = useState('');
   const [automationStatusFilter, setAutomationStatusFilter] = useState('all');
@@ -1131,6 +1145,24 @@ export default function DashboardPage() {
     if (res.ok) { toast.success('Disconnected'); await loadWorkspaces(selectedWorkspaceId); refresh(); loadBillingStatus(); }
   };
 
+  const resubscribeAccount = async (id) => {
+    setResubscribingAccountId(id);
+    try {
+      const res = await fetch(`/api/instagram/accounts/${id}/resubscribe`, {
+        method: 'POST',
+        headers: scopedHeaders(token, selectedWorkspaceId),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to re-subscribe webhook');
+      toast.success('Webhook re-subscribed');
+      refresh();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setResubscribingAccountId('');
+    }
+  };
+
   const selectWorkspace = (id) => {
     setSelectedWorkspaceId(id);
     localStorage.setItem('selectedWorkspaceId', id);
@@ -1251,8 +1283,10 @@ export default function DashboardPage() {
               workspaceName={selectedWorkspace?.name}
               workspaceActive={workspaceActive}
               connecting={connecting}
+              resubscribing={resubscribingAccountId === currentAccount?.id}
               onConnect={connectIG}
               onDisconnect={disconnectAccount}
+              onResubscribe={resubscribeAccount}
             />
             <div className="hidden md:flex items-center gap-2 text-sm">
               <div className={`w-2 h-2 rounded-full ${workspaceActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></div>
