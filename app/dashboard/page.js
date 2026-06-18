@@ -20,12 +20,13 @@ import {
 } from '@/components/ui/dropdown-menu';
 import logoImage from '@/logo.png';
 import { toast } from 'sonner';
+import { authFetch, isSessionExpiredError } from '@/lib/client-auth';
 import {
   Instagram, LogOut, Plus, Trash2, Zap, Send, Sparkles,
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
   Pencil, Settings, Users, Menu, LifeBuoy, CreditCard, ChevronDown, Search,
-  RefreshCw, ImageOff,
+  RefreshCw, ImageOff, Copy, AlertTriangle,
 } from 'lucide-react';
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
@@ -112,6 +113,26 @@ function matchLabel(matchType) {
   return 'contains';
 }
 
+function cloneAutomationName(automation, automations) {
+  const keywords = keywordList(automation);
+  const base = automation?.name || keywords[0] || 'Automation';
+  const names = new Set(automations.map(a => a.name).filter(Boolean));
+  let candidate = `${base} (Copy)`;
+  let n = 2;
+  while (names.has(candidate)) {
+    candidate = `${base} (Copy ${n})`;
+    n += 1;
+  }
+  return candidate;
+}
+
+function cloneAutomationDraft(automation, automations) {
+  return {
+    ...automation,
+    name: cloneAutomationName(automation, automations),
+  };
+}
+
 function scopedHeaders(token, workspaceId, extra = {}) {
   return {
     ...extra,
@@ -163,7 +184,8 @@ function AutomationTypeDialog({ open, onOpenChange, onSelect }) {
   );
 }
 
-function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated, onBillingBlocked }) {
+function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated, onBillingBlocked, cloneSource = null }) {
+  const router = useRouter();
   const [selectedAccount, setSelectedAccount] = useState('');
   const [media, setMedia] = useState([]);
   const [loadingMedia, setLoadingMedia] = useState(false);
@@ -190,14 +212,35 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
   }, [open]);
 
   useEffect(() => {
+    if (!open || !cloneSource) return;
+    setSelectedAccount(cloneSource.instagramAccountId || '');
+    setSelectedPost({
+      id: cloneSource.postId,
+      permalink: cloneSource.postPermalink,
+      thumbnail_url: cloneSource.postThumbnail,
+      media_url: cloneSource.postThumbnail,
+    });
+    setName(cloneSource.name || '');
+    setKeywords(keywordList(cloneSource));
+    setKwInput('');
+    setMatchType(cloneSource.matchType || 'contains');
+    setReplies(paddedVariants(cloneSource.replyMessages || (cloneSource.replyMessage ? [cloneSource.replyMessage] : [])));
+    setDmText(cloneSource.dmText || cloneSource.dmMessage || '');
+    setButtons(cloneSource.dmButtons?.length ? cloneSource.dmButtons : [{ title: '', url: '' }]);
+    setAskToFollow(!!cloneSource.askToFollow);
+    setFollowMessage(cloneSource.followMessage || '');
+    setFollowButtonText(cloneSource.followButtonText || 'I Followed');
+  }, [open, cloneSource]);
+
+  useEffect(() => {
     if (selectedAccount) {
       setLoadingMedia(true);
-      fetch(`/api/instagram/media?accountId=${selectedAccount}`, { headers: scopedHeaders(token, workspaceId) })
+      authFetch(router, `/api/instagram/media?accountId=${selectedAccount}`, { headers: scopedHeaders(token, workspaceId) })
         .then(r => r.json()).then(d => setMedia(d.media || []))
-        .catch(() => toast.error('Failed to load posts'))
+        .catch((e) => { if (!isSessionExpiredError(e)) toast.error('Failed to load posts'); })
         .finally(() => setLoadingMedia(false));
     }
-  }, [selectedAccount, token]);
+  }, [selectedAccount, token, workspaceId, router]);
 
   const addKeyword = () => {
     const k = kwInput.trim().toLowerCase();
@@ -207,14 +250,15 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
 
   const validReplies = replies.filter(r => r.trim()).slice(0, 3);
   const validButtons = buttons.filter(b => b.title.trim() && b.url.trim()).slice(0, 3);
-  const canCreate = selectedAccount && selectedPost && keywords.length > 0 && validReplies.length > 0 && dmText.trim();
+  const cloneNeedsPostChange = !!cloneSource && selectedPost?.id === cloneSource.postId;
+  const canCreate = selectedAccount && selectedPost && !cloneNeedsPostChange && keywords.length > 0 && validReplies.length > 0 && dmText.trim();
 
   const create = async () => {
     if (!canCreate) { toast.error('Fill in the required steps first'); return; }
     setSaving(true);
     try {
       const acct = accounts.find(a => a.id === selectedAccount);
-      const res = await fetch('/api/automations', {
+      const res = await authFetch(router, '/api/automations', {
         method: 'POST',
         headers: scopedHeaders(token, workspaceId, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
@@ -236,10 +280,10 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
         error.billing = !!data.billing;
         throw error;
       }
-      toast.success('Automation created! 🚀');
+      toast.success(cloneSource ? 'Automation cloned' : 'Automation created! 🚀');
       onCreated(data.automation);
       onOpenChange(false);
-    } catch (e) { if (!e.billing) toast.error(e.message); }
+    } catch (e) { if (!e.billing && !isSessionExpiredError(e)) toast.error(e.message); }
     finally { setSaving(false); }
   };
 
@@ -249,9 +293,11 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
         <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
           <DialogTitle className="flex items-center gap-2 text-2xl">
             <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center"><Wand2 className="w-5 h-5 text-white" /></div>
-            New Automation
+            {cloneSource ? 'Clone Automation' : 'New Automation'}
           </DialogTitle>
-          <DialogDescription>Configure how Komentra reacts when someone comments on your post.</DialogDescription>
+          <DialogDescription>
+            {cloneSource ? 'Review the copied settings, choose a different post, then create the new automation.' : 'Configure how Komentra reacts when someone comments on your post.'}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="px-6 py-4 space-y-8">
@@ -280,6 +326,12 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                 : media.length === 0 ? <p className="text-sm text-muted-foreground">No posts found.</p>
                 : (
                   <PostPickerGrid media={media} selectedPost={selectedPost} onSelect={setSelectedPost} />
+                )}
+                {cloneNeedsPostChange && (
+                  <div className="mt-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <p>This clone is copied from an automation on this post. Choose a different post before creating it.</p>
+                  </div>
                 )}
               </div>
             </div>
@@ -403,7 +455,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
         <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={create} disabled={saving || !canCreate} className="bg-slate-950 hover:bg-slate-800">
-            {saving ? 'Creating...' : <>Create Automation <ChevronRight className="w-4 h-4 ml-1" /></>}
+            {saving ? 'Creating...' : <>{cloneSource ? 'Create Clone' : 'Create Automation'} <ChevronRight className="w-4 h-4 ml-1" /></>}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -411,7 +463,8 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
   );
 }
 
-function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated, onBillingBlocked }) {
+function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId, onCreated, onBillingBlocked, cloneSource = null }) {
+  const router = useRouter();
   const [selectedAccount, setSelectedAccount] = useState('');
   const [name, setName] = useState('');
   const [keywords, setKeywords] = useState([]);
@@ -428,6 +481,17 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
     }
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !cloneSource) return;
+    setSelectedAccount(cloneSource.instagramAccountId || '');
+    setName(cloneSource.name || '');
+    setKeywords(keywordList(cloneSource));
+    setKwInput('');
+    setMatchType(cloneSource.matchType || 'contains');
+    setReplies(paddedVariants(cloneSource.replyMessages || (cloneSource.replyMessage ? [cloneSource.replyMessage] : [])));
+    setButtons(cloneSource.replyButtons || []);
+  }, [open, cloneSource]);
+
   const addKeyword = () => {
     const k = kwInput.trim().toLowerCase();
     if (k && !keywords.includes(k)) setKeywords([...keywords, k]);
@@ -442,7 +506,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
     if (!canCreate) { toast.error('Fill in the required steps first'); return; }
     setSaving(true);
     try {
-      const res = await fetch('/api/automations', {
+      const res = await authFetch(router, '/api/automations', {
         method: 'POST',
         headers: scopedHeaders(token, workspaceId, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
@@ -461,10 +525,10 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
         error.billing = !!data.billing;
         throw error;
       }
-      toast.success('DM auto-reply created! 🚀');
+      toast.success(cloneSource ? 'DM auto-reply cloned' : 'DM auto-reply created! 🚀');
       onCreated(data.automation);
       onOpenChange(false);
-    } catch (e) { if (!e.billing) toast.error(e.message); } finally { setSaving(false); }
+    } catch (e) { if (!e.billing && !isSessionExpiredError(e)) toast.error(e.message); } finally { setSaving(false); }
   };
 
   return (
@@ -473,9 +537,11 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
         <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
           <DialogTitle className="flex items-center gap-2 text-2xl">
             <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center"><Inbox className="w-5 h-5 text-white" /></div>
-            DM Auto-Reply
+            {cloneSource ? 'Clone DM Auto-Reply' : 'DM Auto-Reply'}
           </DialogTitle>
-          <DialogDescription>Auto-reply when someone DMs you a specific keyword.</DialogDescription>
+          <DialogDescription>
+            {cloneSource ? 'Review the copied DM reply settings, then create the new automation.' : 'Auto-reply when someone DMs you a specific keyword.'}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="px-6 py-4 space-y-8">
@@ -576,7 +642,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
         <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={create} disabled={saving || !canCreate} className="bg-slate-950 hover:bg-slate-800">
-            {saving ? 'Creating...' : <>Create DM Reply <ChevronRight className="w-4 h-4 ml-1" /></>}
+            {saving ? 'Creating...' : <>{cloneSource ? 'Create Clone' : 'Create DM Reply'} <ChevronRight className="w-4 h-4 ml-1" /></>}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -585,6 +651,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
 }
 
 function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpenChange, onSaved, onBillingBlocked }) {
+  const router = useRouter();
   const open = !!automation;
   const isDmReply = automation?.type === 'dm_reply';
   const [selectedAccount, setSelectedAccount] = useState('');
@@ -628,12 +695,12 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
   useEffect(() => {
     if (!open || !selectedAccount || isDmReply) return;
     setLoadingMedia(true);
-    fetch(`/api/instagram/media?accountId=${selectedAccount}`, { headers: scopedHeaders(token, workspaceId) })
+    authFetch(router, `/api/instagram/media?accountId=${selectedAccount}`, { headers: scopedHeaders(token, workspaceId) })
       .then(r => r.json())
       .then(d => setMedia(d.media || []))
-      .catch(() => toast.error('Failed to load posts'))
+      .catch((e) => { if (!isSessionExpiredError(e)) toast.error('Failed to load posts'); })
       .finally(() => setLoadingMedia(false));
-  }, [open, selectedAccount, isDmReply, token, workspaceId]);
+  }, [open, selectedAccount, isDmReply, token, workspaceId, router]);
 
   const addKeyword = () => {
     const k = kwInput.trim().toLowerCase();
@@ -672,7 +739,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
         payload.followButtonText = askToFollow ? (followButtonText.trim() || 'I Followed') : null;
       }
 
-      const res = await fetch(`/api/automations/${automation._id}`, {
+      const res = await authFetch(router, `/api/automations/${automation._id}`, {
         method: 'PUT',
         headers: scopedHeaders(token, workspaceId, { 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
@@ -688,7 +755,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
       onSaved(data.automation);
       onOpenChange(false);
     } catch (e) {
-      if (!e.billing) toast.error(e.message);
+      if (!e.billing && !isSessionExpiredError(e)) toast.error(e.message);
     } finally {
       setSaving(false);
     }
@@ -847,7 +914,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
   );
 }
 
-function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, disabledActions = false }) {
+function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, onClone, disabledActions = false }) {
   const acct = accounts.find(x => x.id === a.instagramAccountId);
   const keywords = keywordList(a);
   const isDmReply = a.type === 'dm_reply';
@@ -856,42 +923,62 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, disabledActio
   const typeBadge = isDmReply
     ? <Badge className="bg-sky-100 text-sky-700 text-xs">DM Auto-Reply</Badge>
     : <Badge className="bg-slate-100 text-slate-700 text-xs">Comment to DM</Badge>;
+  const mediaBlock = !isDmReply && a.postThumbnail ? (
+    <MediaPreview src={a.postThumbnail} className="h-20 w-20 rounded-lg object-cover ring-1 ring-slate-100 sm:h-24 sm:w-24 sm:rounded-xl sm:ring-2" />
+  ) : (
+    <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-slate-100 sm:h-16 sm:w-16 sm:rounded-xl">
+      <TypeIcon className={`h-6 w-6 sm:h-7 sm:w-7 ${isDmReply ? 'text-sky-700' : 'text-slate-700'}`} />
+    </div>
+  );
+  const statusControl = (
+    <div className="flex shrink-0 items-center gap-2">
+      <span className={`text-xs font-medium ${a.isActive ? 'text-emerald-600' : 'text-muted-foreground'}`}>{a.isActive ? 'ON' : 'OFF'}</span>
+      <Switch checked={a.isActive} disabled={disabledActions} onCheckedChange={() => onToggle(a)} />
+    </div>
+  );
 
   return (
     <Card className={`hover:shadow-md transition-shadow border-l-4 ${accentBorder} bg-white`}>
-      <CardContent className="p-5">
-        <div className="flex items-start gap-4">
-          {!isDmReply && a.postThumbnail ? (
-            <MediaPreview src={a.postThumbnail} className="w-24 h-24 rounded-xl object-cover flex-shrink-0 ring-2 ring-slate-100" />
-          ) : (
-            <div className={`w-16 h-16 rounded-xl flex items-center justify-center flex-shrink-0 ${isDmReply ? 'bg-slate-100' : 'bg-slate-100'}`}>
-              <TypeIcon className={`w-7 h-7 ${isDmReply ? 'text-sky-700' : 'text-slate-700'}`} />
+      <CardContent className="p-4 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+          <div className="flex items-start gap-3 sm:block">
+            <div className="shrink-0">{mediaBlock}</div>
+            <div className="min-w-0 flex-1 sm:hidden">
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="min-w-0 flex-1 text-base font-semibold leading-tight">{a.name || keywords[0] || 'Automation'}</h3>
+                {statusControl}
+              </div>
+              {a.postPermalink && (
+                <a href={a.postPermalink} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                  View Post <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
             </div>
-          )}
+          </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2 mb-3">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-semibold text-lg leading-tight">{a.name || keywords[0] || 'Automation'}</h3>
+                  <h3 className="hidden font-semibold text-lg leading-tight sm:block">{a.name || keywords[0] || 'Automation'}</h3>
                   {typeBadge}
                   {acct && <Badge variant="outline" className="text-xs">@{acct.username}</Badge>}
-                  {a.postPermalink && <a href={a.postPermalink} target="_blank" rel="noreferrer" className="text-xs text-slate-700 hover:underline inline-flex items-center gap-1">View Post <ExternalLink className="w-3 h-3" /></a>}
+                  {a.postPermalink && <a href={a.postPermalink} target="_blank" rel="noreferrer" className="hidden text-xs text-slate-700 hover:underline sm:inline-flex sm:items-center sm:gap-1">View Post <ExternalLink className="w-3 h-3" /></a>}
                 </div>
-                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                <div className="flex items-center gap-1.5 mt-2 flex-wrap sm:mt-3 sm:gap-2">
                   <span className="text-sm font-medium text-slate-700">{triggerLabel(a)} {matchLabel(a.matchType)}</span>
                   {keywords.slice(0, 5).map(k => <Badge key={k} className="bg-slate-100 text-slate-700 text-sm">{k}</Badge>)}
                 </div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`text-xs font-medium ${a.isActive ? 'text-emerald-600' : 'text-muted-foreground'}`}>{a.isActive ? 'ON' : 'OFF'}</span>
-                <Switch checked={a.isActive} disabled={disabledActions} onCheckedChange={() => onToggle(a)} />
-              </div>
+              <div className="hidden sm:block">{statusControl}</div>
             </div>
-            <div className="flex items-center justify-between mt-5 border-t pt-3">
+            <div className="flex flex-col gap-3 border-t pt-3 sm:mt-5 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-sm font-medium text-slate-600">{runLabel(a.runsCount || 0)}</span>
-              <div className="flex items-center gap-2">
+              <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center">
                 <Button variant="ghost" size="sm" disabled={disabledActions} onClick={() => onEdit(a)} className="text-slate-700 hover:bg-slate-100">
                   <Pencil className="w-4 h-4 mr-1" /> Edit
+                </Button>
+                <Button variant="ghost" size="sm" disabled={disabledActions} onClick={() => onClone(a)} className="text-slate-700 hover:bg-slate-100">
+                  <Copy className="w-4 h-4 mr-1" /> Clone
                 </Button>
                 <Button variant="ghost" size="sm" disabled={disabledActions} onClick={() => onDelete(a._id)} className="text-rose-500 hover:text-rose-600 hover:bg-rose-50">
                   <Trash2 className="w-4 h-4 mr-1" /> Delete
@@ -1054,6 +1141,7 @@ export default function DashboardPage() {
   const [billingStatus, setBillingStatus] = useState(null);
   const [automationSearch, setAutomationSearch] = useState('');
   const [automationStatusFilter, setAutomationStatusFilter] = useState('all');
+  const [cloningAutomation, setCloningAutomation] = useState(null);
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -1066,7 +1154,7 @@ export default function DashboardPage() {
   const loadWorkspaces = useCallback(async (preferredId = '') => {
     if (!token) return;
     try {
-      const res = await fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await authFetch(router, '/api/workspaces', { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to load workspaces');
       const list = data.workspaces || [];
@@ -1084,30 +1172,31 @@ export default function DashboardPage() {
         localStorage.setItem('selectedWorkspaceId', nextId);
       }
     } catch (e) {
+      if (isSessionExpiredError(e)) return;
       toast.error(e.message);
     }
-  }, [token, selectedWorkspaceId]);
+  }, [token, selectedWorkspaceId, router]);
 
   const refresh = useCallback(async () => {
     if (!token || !selectedWorkspaceId) return;
     try {
       const [a, b] = await Promise.all([
-        fetch('/api/instagram/accounts', { headers: scopedHeaders(token, selectedWorkspaceId) }).then(r => r.json()),
-        fetch('/api/automations', { headers: scopedHeaders(token, selectedWorkspaceId) }).then(r => r.json()),
+        authFetch(router, '/api/instagram/accounts', { headers: scopedHeaders(token, selectedWorkspaceId) }).then(r => r.json()),
+        authFetch(router, '/api/automations', { headers: scopedHeaders(token, selectedWorkspaceId) }).then(r => r.json()),
       ]);
       setAccounts(a.accounts || []);
       setAutomations(b.automations || []);
-    } catch { toast.error('Failed to load data'); }
-  }, [token, selectedWorkspaceId]);
+    } catch (e) { if (!isSessionExpiredError(e)) toast.error('Failed to load data'); }
+  }, [token, selectedWorkspaceId, router]);
 
   const loadBillingStatus = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await fetch('/api/billing/status', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await authFetch(router, '/api/billing/status', { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
       if (res.ok) setBillingStatus(data);
-    } catch {}
-  }, [token]);
+    } catch (e) {}
+  }, [token, router]);
 
   const showBillingBlocked = useCallback((data) => {
     toast.error(data.error || 'Your current plan limit was reached.', {
@@ -1143,7 +1232,7 @@ export default function DashboardPage() {
     if (accounts.length > 0) { toast.error('This workspace already has an Instagram account. Create a new workspace for another account.'); return; }
     setConnecting(true);
     try {
-      const res = await fetch('/api/instagram/connect', { headers: scopedHeaders(token, selectedWorkspaceId) });
+      const res = await authFetch(router, '/api/instagram/connect', { headers: scopedHeaders(token, selectedWorkspaceId) });
       const data = await res.json();
       if (!res.ok) {
         if (data.billing) showBillingBlocked(data);
@@ -1152,36 +1241,48 @@ export default function DashboardPage() {
         throw error;
       }
       window.location.href = data.url;
-    } catch (e) { if (!e.billing) toast.error(e.message); setConnecting(false); }
+    } catch (e) { if (!e.billing && !isSessionExpiredError(e)) toast.error(e.message); setConnecting(false); }
   };
 
   const toggle = async (a) => {
-    const res = await fetch(`/api/automations/${a._id}`, {
-      method: 'PUT', headers: scopedHeaders(token, selectedWorkspaceId, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ isActive: !a.isActive }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) { toast.success(`Automation ${!a.isActive ? 'enabled' : 'disabled'}`); refresh(); loadBillingStatus(); }
-    else {
-      if (data.billing) showBillingBlocked(data);
-      toast.error(data.error || 'Failed to update automation');
+    try {
+      const res = await authFetch(router, `/api/automations/${a._id}`, {
+        method: 'PUT', headers: scopedHeaders(token, selectedWorkspaceId, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ isActive: !a.isActive }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { toast.success(`Automation ${!a.isActive ? 'enabled' : 'disabled'}`); refresh(); loadBillingStatus(); }
+      else {
+        if (data.billing) showBillingBlocked(data);
+        toast.error(data.error || 'Failed to update automation');
+      }
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to update automation');
     }
   };
   const remove = async (id) => {
     if (!confirm('Delete this automation?')) return;
-    const res = await fetch(`/api/automations/${id}`, { method: 'DELETE', headers: scopedHeaders(token, selectedWorkspaceId) });
-    if (res.ok) { toast.success('Deleted'); refresh(); }
+    try {
+      const res = await authFetch(router, `/api/automations/${id}`, { method: 'DELETE', headers: scopedHeaders(token, selectedWorkspaceId) });
+      if (res.ok) { toast.success('Deleted'); refresh(); }
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to delete automation');
+    }
   };
   const disconnectAccount = async (id) => {
     if (!confirm('Disconnect this Instagram account? All linked automations will be removed.')) return;
-    const res = await fetch(`/api/instagram/accounts/${id}`, { method: 'DELETE', headers: scopedHeaders(token, selectedWorkspaceId) });
-    if (res.ok) { toast.success('Disconnected'); await loadWorkspaces(selectedWorkspaceId); refresh(); loadBillingStatus(); }
+    try {
+      const res = await authFetch(router, `/api/instagram/accounts/${id}`, { method: 'DELETE', headers: scopedHeaders(token, selectedWorkspaceId) });
+      if (res.ok) { toast.success('Disconnected'); await loadWorkspaces(selectedWorkspaceId); refresh(); loadBillingStatus(); }
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to disconnect account');
+    }
   };
 
   const resubscribeAccount = async (id) => {
     setResubscribingAccountId(id);
     try {
-      const res = await fetch(`/api/instagram/accounts/${id}/resubscribe`, {
+      const res = await authFetch(router, `/api/instagram/accounts/${id}/resubscribe`, {
         method: 'POST',
         headers: scopedHeaders(token, selectedWorkspaceId),
       });
@@ -1190,7 +1291,7 @@ export default function DashboardPage() {
       toast.success('Webhook re-subscribed');
       refresh();
     } catch (e) {
-      toast.error(e.message);
+      if (!isSessionExpiredError(e)) toast.error(e.message);
     } finally {
       setResubscribingAccountId('');
     }
@@ -1201,61 +1302,84 @@ export default function DashboardPage() {
     localStorage.setItem('selectedWorkspaceId', id);
   };
 
+  const startClone = (automation) => {
+    const draft = cloneAutomationDraft(automation, automations);
+    setCloningAutomation(draft);
+    if (draft.type === 'dm_reply') setShowCreateDmReply(true);
+    else setShowCreate(true);
+  };
+
   const createWorkspace = async () => {
     const name = window.prompt('Workspace name', 'New Workspace');
     if (!name || !name.trim()) return;
-    const res = await fetch('/api/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name }),
-    });
-    const data = await res.json();
-    if (!res.ok) { if (data.billing) showBillingBlocked(data); else toast.error(data.error || 'Failed to create workspace'); return; }
-    toast.success('Workspace created');
-    await loadWorkspaces(data.workspace.id);
-    loadBillingStatus();
+    try {
+      const res = await authFetch(router, '/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) { if (data.billing) showBillingBlocked(data); else toast.error(data.error || 'Failed to create workspace'); return; }
+      toast.success('Workspace created');
+      await loadWorkspaces(data.workspace.id);
+      loadBillingStatus();
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to create workspace');
+    }
   };
 
   const renameWorkspace = async (name) => {
-    const res = await fetch(`/api/workspaces/${selectedWorkspaceId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name }),
-    });
-    const data = await res.json();
-    if (!res.ok) { toast.error(data.error || 'Failed to rename workspace'); return; }
-    toast.success('Workspace updated');
-    await loadWorkspaces(data.workspace.id);
+    try {
+      const res = await authFetch(router, `/api/workspaces/${selectedWorkspaceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || 'Failed to rename workspace'); return; }
+      toast.success('Workspace updated');
+      await loadWorkspaces(data.workspace.id);
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to rename workspace');
+    }
   };
 
   const setWorkspaceStatus = async (status) => {
-    const res = await fetch(`/api/workspaces/${selectedWorkspaceId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ status }),
-    });
-    const data = await res.json();
-    if (!res.ok) { toast.error(data.error || 'Failed to update workspace'); return; }
-    toast.success(status === 'active' ? 'Workspace enabled' : 'Workspace disabled');
-    await loadWorkspaces(data.workspace.id);
-    refresh();
+    try {
+      const res = await authFetch(router, `/api/workspaces/${selectedWorkspaceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || 'Failed to update workspace'); return; }
+      toast.success(status === 'active' ? 'Workspace enabled' : 'Workspace disabled');
+      await loadWorkspaces(data.workspace.id);
+      refresh();
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to update workspace');
+    }
   };
 
   const deleteWorkspace = async () => {
     const workspace = workspaces.find(w => w.id === selectedWorkspaceId);
     if (!workspace) return;
     if (!confirm(`Permanently delete "${workspace.name}" and all its workspace data?`)) return;
-    const res = await fetch(`/api/workspaces/${selectedWorkspaceId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const data = await res.json();
-    if (!res.ok) { toast.error(data.error || 'Failed to delete workspace'); return; }
-    toast.success('Workspace deleted');
-    setShowWorkspaceSettings(false);
-    setSelectedWorkspaceId('');
-    await loadWorkspaces('');
-    loadBillingStatus();
+    try {
+      const res = await authFetch(router, `/api/workspaces/${selectedWorkspaceId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || 'Failed to delete workspace'); return; }
+      toast.success('Workspace deleted');
+      setShowWorkspaceSettings(false);
+      setSelectedWorkspaceId('');
+      await loadWorkspaces('');
+      loadBillingStatus();
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to delete workspace');
+    }
   };
 
   if (!token || !user) return null;
@@ -1401,7 +1525,7 @@ export default function DashboardPage() {
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-xl font-bold flex items-center gap-2"><Zap className="w-5 h-5 text-amber-500" /> Automations</h2>
             {accounts.length > 0 && (
-              <Button disabled={!workspaceActive} onClick={() => setShowTypeChooser(true)} className="bg-slate-950 hover:bg-slate-800">
+              <Button disabled={!workspaceActive} onClick={() => { setCloningAutomation(null); setShowTypeChooser(true); }} className="bg-slate-950 hover:bg-slate-800">
                 <Plus className="w-4 h-4 mr-2" /> New Automation
               </Button>
             )}
@@ -1476,7 +1600,7 @@ export default function DashboardPage() {
                     </Card>
                   ) : (
                     <div className="space-y-3">
-                      {filteredAutomations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} disabledActions={!workspaceActive} />)}
+                      {filteredAutomations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} onClone={startClone} disabledActions={!workspaceActive} />)}
                     </div>
                   )}
                 </>
@@ -1501,12 +1625,13 @@ export default function DashboardPage() {
         onOpenChange={setShowTypeChooser}
         onSelect={(type) => {
           setShowTypeChooser(false);
+          setCloningAutomation(null);
           if (type === 'dm_reply') setShowCreateDmReply(true);
           else setShowCreate(true);
         }}
       />
-      <CreateAutomationDialog open={showCreate} onOpenChange={setShowCreate} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} />
-      <CreateDmReplyDialog open={showCreateDmReply} onOpenChange={setShowCreateDmReply} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} />
+      <CreateAutomationDialog open={showCreate} onOpenChange={(next) => { setShowCreate(next); if (!next) setCloningAutomation(null); }} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} cloneSource={cloningAutomation?.type !== 'dm_reply' ? cloningAutomation : null} />
+      <CreateDmReplyDialog open={showCreateDmReply} onOpenChange={(next) => { setShowCreateDmReply(next); if (!next) setCloningAutomation(null); }} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} cloneSource={cloningAutomation?.type === 'dm_reply' ? cloningAutomation : null} />
       <EditAutomationDialog automation={editingAutomation} onOpenChange={() => setEditingAutomation(null)} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onSaved={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} />
       <WorkspaceSettingsDialog
         open={showWorkspaceSettings}

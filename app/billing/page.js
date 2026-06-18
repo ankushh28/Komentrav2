@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { authFetch, isSessionExpiredError } from '@/lib/client-auth';
 
 function formatLimit(value) {
   return Number(value || 0).toLocaleString('en-IN');
@@ -85,16 +86,16 @@ export default function BillingPage() {
     if (!token) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/billing/status', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await authFetch(router, '/api/billing/status', { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Unable to load billing status');
       setStatus(data);
     } catch (e) {
-      toast.error(e.message);
+      if (!isSessionExpiredError(e)) toast.error(e.message);
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, router]);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
@@ -109,7 +110,7 @@ export default function BillingPage() {
     if (!token) return;
     setCheckoutPlan(planId);
     try {
-      const res = await fetch('/api/billing/checkout', {
+      const res = await authFetch(router, '/api/billing/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ planId }),
@@ -134,7 +135,7 @@ export default function BillingPage() {
       });
       checkout.open();
     } catch (e) {
-      toast.error(e.message);
+      if (!isSessionExpiredError(e)) toast.error(e.message);
     } finally {
       setCheckoutPlan('');
     }
@@ -146,7 +147,7 @@ export default function BillingPage() {
     if (!confirm(`Schedule ${plan?.name || 'this plan'} for the next billing cycle?`)) return;
     setBillingAction(planId);
     try {
-      const res = await fetch('/api/billing/subscription', {
+      const res = await authFetch(router, '/api/billing/subscription', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ action: 'change_plan', planId }),
@@ -156,7 +157,7 @@ export default function BillingPage() {
       toast.success(data.message || 'Plan change scheduled');
       await loadStatus();
     } catch (e) {
-      toast.error(e.message);
+      if (!isSessionExpiredError(e)) toast.error(e.message);
     } finally {
       setBillingAction('');
     }
@@ -167,7 +168,7 @@ export default function BillingPage() {
     if (!confirm('Schedule cancellation at the end of this billing period? Your current plan remains active until then.')) return;
     setBillingAction('cancel');
     try {
-      const res = await fetch('/api/billing/subscription', {
+      const res = await authFetch(router, '/api/billing/subscription', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ action: 'cancel' }),
@@ -177,7 +178,7 @@ export default function BillingPage() {
       toast.success(data.message || 'Cancellation scheduled');
       await loadStatus();
     } catch (e) {
-      toast.error(e.message);
+      if (!isSessionExpiredError(e)) toast.error(e.message);
     } finally {
       setBillingAction('');
     }

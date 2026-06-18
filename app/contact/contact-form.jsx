@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { Send, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { authFetch, isSessionExpiredError } from '@/lib/client-auth';
 
 const initialForm = {
   name: '',
@@ -21,6 +23,7 @@ const initialForm = {
 };
 
 export function ContactForm() {
+  const router = useRouter();
   const params = useSearchParams();
   const [form, setForm] = useState(initialForm);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -58,7 +61,7 @@ export function ContactForm() {
 
       const preferredWorkspaceId = params.get('workspaceId') || localStorage.getItem('selectedWorkspaceId') || '';
       setLoadingWorkspaces(true);
-      fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } })
+      authFetch(router, '/api/workspaces', { headers: { Authorization: `Bearer ${token}` } })
         .then((res) => res.ok ? res.json() : Promise.reject(new Error('Unable to load workspaces')))
         .then((data) => {
           const list = data.workspaces || [];
@@ -76,10 +79,10 @@ export function ContactForm() {
             }));
           }
         })
-        .catch(() => setWorkspaces([]))
+        .catch((e) => { if (!isSessionExpiredError(e)) setWorkspaces([]); })
         .finally(() => setLoadingWorkspaces(false));
     } catch {}
-  }, [params]);
+  }, [params, router]);
 
   const update = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));

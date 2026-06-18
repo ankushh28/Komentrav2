@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ArrowLeft, Download, Search, Users, Activity, MessageCircle, Inbox } from 'lucide-react';
+import { authFetch, isSessionExpiredError } from '@/lib/client-auth';
 
 function scopedHeaders(token, workspaceId, extra = {}) {
   return {
@@ -39,36 +40,47 @@ export default function AudiencePage() {
 
   useEffect(() => {
     const t = localStorage.getItem('token');
-    if (!t) { router.push('/'); return; }
+    if (!t) { router.replace('/auth?mode=login'); return; }
     setToken(t);
   }, [router]);
 
   const loadWorkspaces = useCallback(async () => {
     if (!token) return;
-    const res = await fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    const list = data.workspaces || [];
-    setWorkspaces(list);
-    const stored = localStorage.getItem('selectedWorkspaceId');
-    const nextId = (stored && list.some(w => w.id === stored) && stored) || list.find(w => w.status === 'active')?.id || list[0]?.id || '';
-    if (nextId) {
-      setSelectedWorkspaceId(nextId);
-      localStorage.setItem('selectedWorkspaceId', nextId);
+    try {
+      const res = await authFetch(router, '/api/workspaces', { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unable to load workspaces');
+      const list = data.workspaces || [];
+      setWorkspaces(list);
+      const stored = localStorage.getItem('selectedWorkspaceId');
+      const nextId = (stored && list.some(w => w.id === stored) && stored) || list.find(w => w.status === 'active')?.id || list[0]?.id || '';
+      if (nextId) {
+        setSelectedWorkspaceId(nextId);
+        localStorage.setItem('selectedWorkspaceId', nextId);
+      }
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Unable to load workspaces');
     }
-  }, [token]);
+  }, [token, router]);
 
   const loadAudience = useCallback(async () => {
     if (!token || !selectedWorkspaceId) return;
     setLoading(true);
-    const params = new URLSearchParams();
-    if (search.trim()) params.set('search', search.trim());
-    const res = await fetch(`/api/audience${params.toString() ? `?${params}` : ''}`, {
-      headers: scopedHeaders(token, selectedWorkspaceId),
-    });
-    const data = await res.json();
-    setAudience(data.audience || []);
-    setLoading(false);
-  }, [token, selectedWorkspaceId, search]);
+    try {
+      const params = new URLSearchParams();
+      if (search.trim()) params.set('search', search.trim());
+      const res = await authFetch(router, `/api/audience${params.toString() ? `?${params}` : ''}`, {
+        headers: scopedHeaders(token, selectedWorkspaceId),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unable to load audience');
+      setAudience(data.audience || []);
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Unable to load audience');
+    } finally {
+      setLoading(false);
+    }
+  }, [token, selectedWorkspaceId, search, router]);
 
   useEffect(() => { if (token) loadWorkspaces(); }, [token, loadWorkspaces]);
   useEffect(() => { if (selectedWorkspaceId) loadAudience(); }, [selectedWorkspaceId, loadAudience]);
@@ -88,7 +100,7 @@ export default function AudiencePage() {
 
   const exportCsv = () => {
     if (!token || !selectedWorkspaceId) return;
-    fetch('/api/audience/export', { headers: scopedHeaders(token, selectedWorkspaceId) })
+    authFetch(router, '/api/audience/export', { headers: scopedHeaders(token, selectedWorkspaceId) })
       .then(async (res) => {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
@@ -113,7 +125,7 @@ export default function AudiencePage() {
         a.remove();
         URL.revokeObjectURL(url);
       })
-      .catch((e) => toast.error(e.message));
+      .catch((e) => { if (!isSessionExpiredError(e)) toast.error(e.message); });
   };
 
   if (!token) return null;

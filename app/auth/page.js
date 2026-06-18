@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { toast } from 'sonner';
 import { Mail, ArrowLeft, ShieldCheck, KeyRound } from 'lucide-react';
 import logoImage from '@/logo.png';
+import { consumeSessionExpiredMessage } from '@/lib/client-auth';
 
 function AuthInner() {
   const router = useRouter();
@@ -23,6 +24,11 @@ function AuthInner() {
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const message = consumeSessionExpiredMessage();
+    if (message) toast.info(message);
+  }, []);
 
   const submit = async (e) => {
     e.preventDefault();

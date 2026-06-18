@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +16,7 @@ import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
   BarChart, Bar,
 } from 'recharts';
+import { authFetch, isSessionExpiredError } from '@/lib/client-auth';
 
 function StatTile({ label, value, sublabel, icon: Icon }) {
   return (
@@ -68,21 +70,30 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) { router.push('/'); return; }
-    Promise.all([
-      fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
-      fetch('/api/analytics', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
-    ])
-      .then(([workspaceData, analyticsData]) => {
+    const load = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) { router.replace('/auth?mode=login'); return; }
+      try {
+        const [workspaceRes, analyticsRes] = await Promise.all([
+          authFetch(router, '/api/workspaces', { headers: { Authorization: `Bearer ${token}` } }),
+          authFetch(router, '/api/analytics', { headers: { Authorization: `Bearer ${token}` } }),
+        ]);
+        const [workspaceData, analyticsData] = await Promise.all([workspaceRes.json(), analyticsRes.json()]);
+        if (!workspaceRes.ok) throw new Error(workspaceData.error || 'Unable to load workspaces');
+        if (!analyticsRes.ok) throw new Error(analyticsData.error || 'Unable to load analytics');
         const list = workspaceData.workspaces || [];
         setWorkspaces(list);
         const stored = localStorage.getItem('selectedWorkspaceId');
         const nextId = (stored && list.some(w => w.id === stored) && stored) || list.find(w => w.status === 'active')?.id || list[0]?.id || '';
         setSelectedWorkspaceId(nextId);
         setData(analyticsData);
-      })
-      .finally(() => setLoading(false));
+      } catch (e) {
+        if (!isSessionExpiredError(e)) toast.error(e.message || 'Unable to load analytics');
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
   }, [router]);
 
   if (loading) {
