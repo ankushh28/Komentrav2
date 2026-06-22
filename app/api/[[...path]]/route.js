@@ -14,6 +14,7 @@ import {
   getBillingStatus,
   getUserEntitlements,
 } from '@/lib/entitlements';
+import { canonicalInstagramPostKey } from '@/lib/instagram-post-share';
 
 const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
@@ -77,6 +78,13 @@ async function ensureWorkspaceIndexes(db) {
       ),
       db.collection('instagram_accounts').createIndex({ connectedUserId: 1, workspaceId: 1 }),
       db.collection('automations').createIndex({ userId: 1, workspaceId: 1 }),
+      db.collection('automations').createIndex({
+        workspaceId: 1,
+        instagramAccountId: 1,
+        type: 1,
+        isActive: 1,
+        respondToPostShares: 1,
+      }),
       db.collection('automations').createIndex(
         { workspaceId: 1, instagramAccountId: 1, type: 1, postId: 1 },
         {
@@ -996,15 +1004,20 @@ async function handleCreateAutomation(req) {
   const {
     instagramAccountId, postId, postPermalink, postThumbnail,
     keywords, matchType, replyMessages, dmText, dmButtons,
-    askToFollow, followMessage, followButtonText, name,
+    askToFollow, followMessage, followButtonText, respondToPostShares, name,
   } = body;
   const cleanKeywords = cleanKeywordList(keywords);
   const cleanReplies = cleanStringList(replyMessages);
   const cleanButtons = cleanButtonList(dmButtons);
   const cleanDmText = String(dmText || '').trim();
   const cleanPostId = String(postId || '').trim();
+  const cleanPostPermalink = String(postPermalink || '').trim() || null;
+  const postShareKey = canonicalInstagramPostKey(cleanPostPermalink);
   if (!instagramAccountId || !cleanPostId || cleanKeywords.length === 0 || cleanReplies.length === 0 || !cleanDmText) {
     return json({ error: 'Missing fields. Need at least 1 keyword, 1 reply variant and a DM message.' }, 400);
+  }
+  if (respondToPostShares && !postShareKey) {
+    return json({ error: 'This post does not have a valid Instagram permalink for shared-post DMs.' }, 400);
   }
   const duplicate = await findDuplicateCommentAutomation(db, {
     workspaceId: workspace._id,
@@ -1026,8 +1039,9 @@ async function handleCreateAutomation(req) {
     instagramAccountId,
     type: 'comment_dm',
     postId: cleanPostId,
-    postPermalink: postPermalink || null,
+    postPermalink: cleanPostPermalink,
     postThumbnail: postThumbnail || null,
+    postShareKey,
     name: String(name || '').trim() || cleanKeywords[0],
     keywords: cleanKeywords,
     matchType: normalizeMatchType(matchType),
@@ -1035,6 +1049,7 @@ async function handleCreateAutomation(req) {
     dmText: cleanDmText,
     dmButtons: cleanButtons,
     askToFollow: !!askToFollow,
+    respondToPostShares: !!respondToPostShares,
     followMessage: askToFollow ? (String(followMessage || '').trim() || `Follow @${account.username || ''} first to unlock this!`) : null,
     followButtonText: askToFollow ? (String(followButtonText || '').trim() || 'I Followed') : null,
     igUsername: account.username || null,
@@ -1082,7 +1097,7 @@ async function handleUpdateAutomation(req, id) {
   const settingKeys = [
     'instagramAccountId', 'name', 'keywords', 'matchType', 'replyMessages',
     'replyButtons', 'postId', 'postPermalink', 'postThumbnail', 'dmText',
-    'dmButtons', 'askToFollow', 'followMessage', 'followButtonText',
+    'dmButtons', 'askToFollow', 'followMessage', 'followButtonText', 'respondToPostShares',
   ];
   const hasSettingsUpdate = settingKeys.some(key => Object.prototype.hasOwnProperty.call(body, key));
 
@@ -1143,13 +1158,25 @@ async function handleUpdateAutomation(req, id) {
       const askToFollow = Object.prototype.hasOwnProperty.call(body, 'askToFollow')
         ? !!body.askToFollow
         : !!existing.askToFollow;
+      const postPermalink = Object.prototype.hasOwnProperty.call(body, 'postPermalink')
+        ? (String(body.postPermalink || '').trim() || null)
+        : (existing.postPermalink || null);
+      const respondToPostShares = Object.prototype.hasOwnProperty.call(body, 'respondToPostShares')
+        ? !!body.respondToPostShares
+        : !!existing.respondToPostShares;
+      const postShareKey = canonicalInstagramPostKey(postPermalink);
+      if (respondToPostShares && !postShareKey) {
+        return json({ error: 'This post does not have a valid Instagram permalink for shared-post DMs.' }, 400);
+      }
 
       update.postId = postId;
-      update.postPermalink = Object.prototype.hasOwnProperty.call(body, 'postPermalink') ? (body.postPermalink || null) : (existing.postPermalink || null);
+      update.postPermalink = postPermalink;
       update.postThumbnail = Object.prototype.hasOwnProperty.call(body, 'postThumbnail') ? (body.postThumbnail || null) : (existing.postThumbnail || null);
+      update.postShareKey = postShareKey;
       update.dmText = dmText;
       update.dmButtons = Object.prototype.hasOwnProperty.call(body, 'dmButtons') ? cleanButtonList(body.dmButtons) : cleanButtonList(existing.dmButtons || []);
       update.askToFollow = askToFollow;
+      update.respondToPostShares = respondToPostShares;
       update.followMessage = askToFollow
         ? (String(Object.prototype.hasOwnProperty.call(body, 'followMessage') ? body.followMessage : existing.followMessage || '').trim() || `Follow @${account.username || ''} first to unlock this!`)
         : null;
@@ -1438,6 +1465,7 @@ async function handleAnalytics(req) {
     await db.collection('automations').find({ userId: u.userId }).toArray()
   );
   const accounts = await db.collection('instagram_accounts').find({ connectedUserId: u.userId }).toArray();
+  const triggerFlows = new Set(['direct', 'follow-gated', 'post-share-dm']);
 
   // Daily timeline for the plan lookback window
   const days = [];
@@ -1451,7 +1479,7 @@ async function handleAnalytics(req) {
   // Per automation totals
   const perAutomation = automations.map(a => {
     const runs = allRuns.filter(r => r.automationId === a._id);
-    const triggers = runs.filter(r => r.flow === 'direct' || r.flow === 'follow-gated').length;
+    const triggers = runs.filter(r => triggerFlows.has(r.flow)).length;
     const dms = runs.filter(r => r.dmResult?.ok).length;
     const followConfirmed = runs.filter(r => r.flow === 'follow-confirmed').length;
     const lastRun = runs.length ? runs.map(r => new Date(r.ranAt)).sort((a, b) => b - a)[0] : null;
@@ -1479,7 +1507,7 @@ async function handleAnalytics(req) {
   const topKeywords = Object.entries(kwMap).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, c]) => ({ keyword: k, count: c }));
 
   // Funnel
-  const totalTriggers = allRuns.filter(r => ['direct', 'follow-gated'].includes(r.flow)).length;
+  const totalTriggers = allRuns.filter(r => triggerFlows.has(r.flow)).length;
   const totalReplies = allRuns.filter(r => r.replyResult?.ok).length;
   const totalDMs = allRuns.filter(r => r.dmResult?.ok).length;
   const totalFollowGated = allRuns.filter(r => r.flow === 'follow-gated').length;
@@ -1518,7 +1546,7 @@ async function handleAnalytics(req) {
       accounts: workspaceAccounts.length,
       automations: workspaceAutomations.length,
       activeAutomations: workspaceAutomations.filter(a => a.isActive).length,
-      triggers: workspaceRuns.filter(r => ['direct', 'follow-gated'].includes(r.flow)).length,
+      triggers: workspaceRuns.filter(r => triggerFlows.has(r.flow)).length,
       dms: workspaceRuns.filter(r => r.dmResult?.ok).length,
     };
   });

@@ -25,6 +25,10 @@ import {
   getMetaRateLimitPauseUntil,
   parseMetaRateLimitHeaders,
 } from './lib/meta-rate-limit.js';
+import {
+  extractInstagramPostShares,
+  findMatchingInstagramPostShare,
+} from './lib/instagram-post-share.js';
 
 // Lightweight .env loader (avoids extra dep)
 try {
@@ -787,6 +791,191 @@ async function upsertAudienceMember(dbi, {
   return result.value || result;
 }
 
+async function processInstagramPostShare({ dbi, job, msg, igUserId, senderId, recipientId, shares }) {
+  if (!senderId || shares.length === 0) return false;
+
+  const accountLookupIds = [recipientId, igUserId];
+  const acct = await findConnectedAccountForMessaging(dbi, accountLookupIds);
+  if (!acct) {
+    logAutomation('post-share-dm', 'no connected instagram account found for shared post', {
+      jobId: job.id,
+      senderId,
+      lookupIds: accountLookupIds.filter(Boolean),
+    });
+    return true;
+  }
+  await rememberWebhookIds(dbi, acct._id, accountLookupIds);
+  if (!(await isWorkspaceActive(dbi, acct.workspaceId))) {
+    logAutomation('post-share-dm', 'skipped disabled workspace', {
+      jobId: job.id,
+      workspaceId: acct.workspaceId || null,
+      instagramAccountId: acct._id,
+    });
+    return true;
+  }
+
+  const automations = await dbi.collection('automations').find({
+    instagramAccountId: acct._id,
+    workspaceId: acct.workspaceId,
+    type: 'comment_dm',
+    isActive: true,
+    respondToPostShares: true,
+  }).sort({ createdAt: 1 }).toArray();
+  const match = findMatchingInstagramPostShare(automations, shares);
+  if (!match) {
+    logAutomation('post-share-dm', 'shared post did not match an enabled automation', {
+      jobId: job.id,
+      instagramAccountId: acct._id,
+      senderId,
+      postKeys: shares.map(share => share.postKey),
+      candidates: automations.length,
+    });
+    return false;
+  }
+  const { automation: auto, share } = match;
+  const dmText = String(auto.dmText || auto.dmMessage || '').trim();
+  if (!dmText) {
+    logAutomation('post-share-dm', 'skipped matched automation with no dm message', {
+      jobId: job.id,
+      automationId: auto._id,
+    });
+    return true;
+  }
+  if (logIfAutomationsPaused(acct, 'post-share-dm', { automationId: auto._id, senderId })) return true;
+  if (logIfAutomationPaused(auto, 'post-share-dm', {
+    instagramAccountId: acct._id,
+    senderId,
+  })) return true;
+
+  const canSend = await assertCanSendForAccount(dbi, acct, 'post-share-dm', {
+    jobId: job.id,
+    automationId: auto._id,
+    senderId,
+  });
+  if (!canSend) return true;
+
+  const sourceEventId = dmSourceEventId(msg, senderId, recipientId, share.url);
+  const deliveryKey = `post_share_dm:${auto._id}:${sourceEventId}`;
+  const delivery = await claimAutomationDelivery(dbi, {
+    key: deliveryKey,
+    automationId: auto._id,
+    workspaceId: auto.workspaceId || acct.workspaceId || null,
+    instagramAccountId: auto.instagramAccountId,
+    flow: 'post-share-dm',
+    sourceEventId,
+    jobId: job.id,
+  });
+  if (!delivery.claimed) {
+    logAutomation('post-share-dm', 'duplicate delivery skipped', {
+      jobId: job.id,
+      automationId: auto._id,
+      deliveryKey,
+    });
+    return true;
+  }
+
+  const quota = await consumeTriggerOrRecordLimit(dbi, {
+    auto,
+    acct,
+    deliveryKey,
+    flow: 'post-share-dm',
+    sourceEventId,
+    jobId: job.id,
+    fromUserId: senderId,
+  });
+  if (!quota.ok) return true;
+
+  const buttons = (auto.dmButtons || []).filter(button => button.title && button.url).slice(0, 3);
+  let dmResult = null;
+  try {
+    if (auto.askToFollow) {
+      dmResult = await sendFollowPrompt(
+        acct.accessToken,
+        { id: senderId },
+        auto.followMessage || `Follow @${acct.username || ''} first to unlock this!`,
+        auto.followButtonText || 'I Followed',
+        auto._id,
+        acct.username,
+      );
+    } else {
+      dmResult = buttons.length > 0
+        ? await sendDMButtons(acct.accessToken, { id: senderId }, dmText, buttons)
+        : await sendDMText(acct.accessToken, { id: senderId }, dmText);
+    }
+    await recordMetaRateLimitUsage(dbi, acct, dmResult, 'post-share-dm', {
+      jobId: job.id,
+      automationId: auto._id,
+      senderId,
+      stage: auto.askToFollow ? 'follow_prompt' : 'shared_post_dm',
+    });
+    const sendError = graphSendError(dmResult, 'Instagram rejected the shared-post DM');
+    if (sendError) throw sendError;
+    await markDeliverySent(dbi, deliveryKey, { dmResult, sharedPostUrl: share.url });
+  } catch (e) {
+    await markDeliveryFailed(dbi, deliveryKey, e);
+    await pauseAccountForGraphRisk(dbi, acct, e);
+    logAutomation('post-share-dm', 'send failed after delivery claim', {
+      jobId: job.id,
+      automationId: auto._id,
+      deliveryKey,
+      error: e?.message,
+    });
+    return true;
+  }
+
+  try {
+    const profile = await getUserProfile(acct.accessToken, senderId);
+    await recordMetaRateLimitUsage(dbi, acct, profile, 'post-share-dm', {
+      jobId: job.id,
+      automationId: auto._id,
+      senderId,
+      stage: 'user_profile',
+    });
+    const audienceMember = await upsertAudienceMember(dbi, {
+      auto,
+      acct,
+      instagramScopedUserId: senderId,
+      username: profile.ok ? profile.username : null,
+      displayName: profile.ok ? profile.displayName : null,
+      triggerType: 'dm',
+      text: `Shared post: ${share.url}`,
+    });
+    await dbi.collection('automation_runs').insertOne({
+      _id: uuidv4(),
+      automationId: auto._id,
+      userId: auto.userId,
+      workspaceId: auto.workspaceId || acct.workspaceId || null,
+      instagramAccountId: auto.instagramAccountId,
+      audienceMemberId: audienceMember?._id || null,
+      fromUserId: senderId,
+      fromUsername: profile.ok ? profile.username : null,
+      fromDisplayName: profile.ok ? profile.displayName : null,
+      sourceMessageId: sourceEventId,
+      sharedPostUrl: share.url,
+      sharedPostKey: share.postKey,
+      replyUsed: dmText,
+      dmResult,
+      flow: 'post-share-dm',
+      ranAt: new Date(),
+    });
+    logAutomation('post-share-dm', 'automation run recorded', {
+      jobId: job.id,
+      automationId: auto._id,
+      senderId,
+      sharedPostKey: share.postKey,
+    });
+  } catch (e) {
+    await recordDeliveryPostProcessError(dbi, deliveryKey, e);
+    logAutomation('post-share-dm', 'post-send persistence failed', {
+      jobId: job.id,
+      automationId: auto._id,
+      deliveryKey,
+      error: e?.message,
+    });
+  }
+  return true;
+}
+
 // ---- Job processor ----
 async function processJob(job) {
   const body = job.data;
@@ -1133,6 +1322,7 @@ async function processJob(job) {
 
       const senderId = msg.sender?.id;
       const recipientId = msg.recipient?.id;
+      const postShares = extractInstagramPostShares(msg.message);
       logAutomation('messaging', 'message event received', {
         jobId: job.id,
         igUserId,
@@ -1142,6 +1332,7 @@ async function processJob(job) {
         text: textPreview(msg.message?.text),
         hasPostback: !!msg.postback?.payload,
         postbackPayload: msg.postback?.payload || null,
+        postShares: postShares.map(share => share.postKey),
       });
 
       // 1) Handle "I Followed" postback button
@@ -1411,7 +1602,21 @@ async function processJob(job) {
         continue;
       }
 
-      // 2) DM AUTO-REPLY: a regular incoming DM with text
+      // 2) SHARED POST DM: the selected post or reel was sent to this inbox.
+      if (postShares.length > 0 && senderId) {
+        const handled = await processInstagramPostShare({
+          dbi,
+          job,
+          msg,
+          igUserId,
+          senderId,
+          recipientId,
+          shares: postShares,
+        });
+        if (handled) continue;
+      }
+
+      // 3) DM AUTO-REPLY: a regular incoming DM with text
       const incomingText = msg.message?.text;
       if (incomingText && senderId) {
         logAutomation('dm-auto-reply', 'checking incoming dm text', {

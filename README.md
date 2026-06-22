@@ -11,6 +11,7 @@ The backend is built into the Next.js app through one catch-all API route, and w
 - Workspace-based organization for accounts, automations, analytics, and audience data.
 - Instagram OAuth connection with long-lived Instagram tokens.
 - Comment-to-DM automation for selected Instagram posts.
+- Optional DM response when a user shares the selected post or reel to the connected account's inbox.
 - DM auto-reply automation for incoming Instagram messages.
 - Follow-gated DM flow using Instagram postback buttons.
 - Meta webhook verification with `X-Hub-Signature-256`.
@@ -143,6 +144,7 @@ There are two automation types.
   "replyMessages": ["Sent you the details."],
   "dmText": "Here is the link you asked for.",
   "dmButtons": [{ "title": "Open link", "url": "https://example.com" }],
+  "respondToPostShares": false,
   "askToFollow": false,
   "followMessage": "",
   "followButtonText": "I Followed"
@@ -171,6 +173,8 @@ There are two automation types.
 | DELETE | `/api/automations/:id` | Delete automation |
 
 Supported `matchType` values are `contains`, `exact`, and `starts_with`.
+
+For `comment_dm` automations, `respondToPostShares` is optional and defaults to `false`. When enabled, an incoming `messages` webhook whose `share`, `ig_reel`, or `reel` attachment URL matches the selected post permalink sends the configured DM without posting a public comment reply. Matching is scoped to the connected Instagram account and ignores permalink query parameters and fragments. The existing follow gate and DM buttons also apply to this trigger.
 
 ### Analytics And Audience
 
@@ -298,7 +302,7 @@ https://your-ngrok-url.ngrok-free.app/api/webhook
 ```
 
 5. Use the same verify token as `WEBHOOK_VERIFY_TOKEN`.
-6. Subscribe to `comments` and `messages`.
+6. Subscribe to `comments` and `messages`. The `messages` field is required for keyword DM replies and shared-post DM triggers.
 7. In development mode, add Instagram tester accounts and accept tester invites in the Instagram app.
 8. For production, request required Instagram permissions:
 
@@ -359,4 +363,3 @@ These are documented in `CODE_REVIEW_EDGE_CASES.md` and should be prioritized be
 - TTL/redaction for archived webhook payloads.
 - Stricter CORS and frame headers.
 - Consistent frontend handling for expired sessions.
-

@@ -200,6 +200,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
   const [askToFollow, setAskToFollow] = useState(false);
   const [followMessage, setFollowMessage] = useState('');
   const [followButtonText, setFollowButtonText] = useState('I Followed');
+  const [respondToPostShares, setRespondToPostShares] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -208,6 +209,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
       setKeywords([]); setKwInput(''); setMatchType('contains');
       setReplies(['', '', '']); setDmText(''); setButtons([{ title: '', url: '' }]);
       setAskToFollow(false); setFollowMessage(''); setFollowButtonText('I Followed');
+      setRespondToPostShares(false);
     }
   }, [open]);
 
@@ -230,6 +232,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
     setAskToFollow(!!cloneSource.askToFollow);
     setFollowMessage(cloneSource.followMessage || '');
     setFollowButtonText(cloneSource.followButtonText || 'I Followed');
+    setRespondToPostShares(!!cloneSource.respondToPostShares);
   }, [open, cloneSource]);
 
   useEffect(() => {
@@ -269,6 +272,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           keywords, matchType, replyMessages: validReplies,
           dmText: dmText.trim(), dmButtons: validButtons,
           askToFollow,
+          respondToPostShares,
           followMessage: askToFollow ? (followMessage.trim() || `Follow @${acct?.username || ''} first to unlock this!`) : null,
           followButtonText: askToFollow ? (followButtonText.trim() || 'I Followed') : null,
         }),
@@ -289,10 +293,10 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0">
-        <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
-          <DialogTitle className="flex items-center gap-2 text-2xl">
-            <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center"><Wand2 className="w-5 h-5 text-white" /></div>
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-3xl max-h-[92vh] overflow-y-auto p-0">
+        <DialogHeader className="px-4 pt-5 pb-3 border-b sticky top-0 bg-white z-10 sm:px-6 sm:pt-6">
+          <DialogTitle className="flex items-center gap-2 text-xl sm:text-2xl">
+            <div className="w-9 h-9 rounded-lg bg-slate-950 flex shrink-0 items-center justify-center"><Wand2 className="w-5 h-5 text-white" /></div>
             {cloneSource ? 'Clone Automation' : 'New Automation'}
           </DialogTitle>
           <DialogDescription>
@@ -300,13 +304,13 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           </DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 py-4 space-y-8">
+        <div className="px-4 py-4 space-y-6 sm:px-6 sm:space-y-8">
           {/* Step 1 */}
           <div className="space-y-3">
             <SectionHeader icon={Instagram} step="1" title="Instagram Account" subtitle="Pick the account this automation runs on." />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 ml-11">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:ml-11">
               {accounts.map((a) => (
-                <button key={a.id} onClick={() => { setSelectedAccount(a.id); setSelectedPost(null); }}
+                <button key={a.id} onClick={() => { setSelectedAccount(a.id); setSelectedPost(null); setRespondToPostShares(false); }}
                   className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-slate-950 bg-slate-50 shadow-sm' : 'border-border hover:border-slate-300'}`}>
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-full bg-slate-950 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
@@ -321,11 +325,15 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           {selectedAccount && (
             <div className="space-y-3">
               <SectionHeader icon={Hash} step="2" title="Select Post" subtitle="Choose the post to monitor for comments." />
-              <div className="ml-11">
+              <div className="sm:ml-11">
                 {loadingMedia ? <p className="text-sm text-muted-foreground">Loading posts...</p>
                 : media.length === 0 ? <p className="text-sm text-muted-foreground">No posts found.</p>
                 : (
-                  <PostPickerGrid media={media} selectedPost={selectedPost} onSelect={setSelectedPost} />
+                  <PostPickerGrid
+                    media={media}
+                    selectedPost={selectedPost}
+                    onSelect={(post) => { setSelectedPost(post); if (!post?.permalink) setRespondToPostShares(false); }}
+                  />
                 )}
                 {cloneNeedsPostChange && (
                   <div className="mt-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -333,6 +341,22 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                     <p>This clone is copied from an automation on this post. Choose a different post before creating it.</p>
                   </div>
                 )}
+                <div className="mt-3 rounded-xl border bg-slate-50 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="font-medium text-sm">Reply when this post is shared in DM</p>
+                      <p className="text-xs text-muted-foreground">Send the configured DM to the sender without posting a public comment reply.</p>
+                    </div>
+                    <Switch
+                      checked={respondToPostShares}
+                      disabled={!selectedPost?.permalink}
+                      onCheckedChange={setRespondToPostShares}
+                    />
+                  </div>
+                  {!selectedPost?.permalink && (
+                    <p className="mt-2 text-xs text-amber-700">Instagram did not provide a permalink for this post, so shared-post matching is unavailable.</p>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -341,8 +365,8 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           {selectedPost && (
             <div className="space-y-3">
               <SectionHeader icon={Sparkles} step="3" title="When user comments" subtitle="Keywords Komentra listens for on this post." />
-              <div className="ml-11 space-y-3">
-                <div className="flex items-center gap-2">
+              <div className="space-y-3 sm:ml-11">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Input value={kwInput} onChange={(e) => setKwInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addKeyword(); } }}
                     placeholder='e.g. "price"  →  press Enter' className="flex-1" />
@@ -358,10 +382,10 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                     ))}
                   </div>
                 )}
-                <div className="flex items-center gap-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                   <Label className="text-sm">Comment match:</Label>
                   <Select value={matchType} onValueChange={setMatchType}>
-                    <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="contains">Contains keyword (recommended)</SelectItem>
                       <SelectItem value="exact">Exact match</SelectItem>
@@ -377,7 +401,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           {selectedPost && (
             <div className="space-y-3">
               <SectionHeader icon={Shuffle} step="4" title="Public Reply Variants" subtitle="Add up to 3. We'll pick one at random for each match." />
-              <div className="ml-11 space-y-2">
+              <div className="space-y-2 sm:ml-11">
                 {replies.map((r, i) => (
                   <div key={i} className="flex items-start gap-2">
                     <span className="text-xs font-mono text-muted-foreground pt-3">#{i + 1}</span>
@@ -394,8 +418,8 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           {selectedPost && (
             <div className="space-y-3">
               <SectionHeader icon={UserPlus} step="5" title="Ask To Follow First" subtitle="Send a follow-prompt with verification before the main DM." />
-              <div className="ml-11 rounded-xl border bg-slate-50 p-4 space-y-3">
-                <div className="flex items-center justify-between">
+              <div className="rounded-xl border bg-slate-50 p-4 space-y-3 sm:ml-11">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="font-medium text-sm">Require user to follow first</p>
                     <p className="text-xs text-muted-foreground">We verify the follow via Instagram API before sending main DM.</p>
@@ -424,7 +448,7 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           {selectedPost && (
             <div className="space-y-3">
               <SectionHeader icon={Send} step="6" title="Direct Message" subtitle="DM text + up to 3 link buttons." />
-              <div className="ml-11 space-y-3">
+              <div className="space-y-3 sm:ml-11">
                 <Textarea value={dmText} onChange={(e) => setDmText(e.target.value)} placeholder="Hey! Here's everything you need 👇" rows={3} />
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -432,10 +456,10 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
                     {buttons.length < 3 && <Button type="button" size="sm" variant="ghost" onClick={() => setButtons([...buttons, { title: '', url: '' }])} className="text-slate-700 h-7"><Plus className="w-3 h-3 mr-1" /> Add link</Button>}
                   </div>
                   {buttons.map((b, i) => (
-                    <div key={i} className="flex items-center gap-2 rounded-lg border p-2 bg-white">
-                      <Input value={b.title} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], title: e.target.value }; setButtons(n); }} placeholder="Button text" className="flex-1" />
-                      <Input value={b.url} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], url: e.target.value }; setButtons(n); }} placeholder="https://..." className="flex-[1.5]" />
-                      <Button type="button" size="icon" variant="ghost" onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))}><X className="w-4 h-4 text-rose-500" /></Button>
+                    <div key={i} className="grid gap-2 rounded-lg border p-2 bg-white sm:grid-cols-[1fr_1.5fr_auto] sm:items-center">
+                      <Input value={b.title} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], title: e.target.value }; setButtons(n); }} placeholder="Button text" className="min-w-0" />
+                      <Input value={b.url} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], url: e.target.value }; setButtons(n); }} placeholder="https://..." className="min-w-0" />
+                      <Button type="button" size="icon" variant="ghost" onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))} className="justify-self-end"><X className="w-4 h-4 text-rose-500" /></Button>
                     </div>
                   ))}
                 </div>
@@ -447,12 +471,12 @@ function CreateAutomationDialog({ open, onOpenChange, accounts, token, workspace
           {selectedPost && (
             <div className="space-y-3">
               <SectionHeader icon={Zap} step="7" title="Name (optional)" subtitle="Just for your own reference." />
-              <div className="ml-11"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={keywords[0] || 'My automation'} /></div>
+              <div className="sm:ml-11"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={keywords[0] || 'My automation'} /></div>
             </div>
           )}
         </div>
 
-        <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
+        <DialogFooter className="px-4 py-4 border-t bg-slate-50 sticky bottom-0 sm:px-6">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={create} disabled={saving || !canCreate} className="bg-slate-950 hover:bg-slate-800">
             {saving ? 'Creating...' : <>{cloneSource ? 'Create Clone' : 'Create Automation'} <ChevronRight className="w-4 h-4 ml-1" /></>}
@@ -533,10 +557,10 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto p-0">
-        <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
-          <DialogTitle className="flex items-center gap-2 text-2xl">
-            <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center"><Inbox className="w-5 h-5 text-white" /></div>
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-2xl max-h-[92vh] overflow-y-auto p-0">
+        <DialogHeader className="px-4 pt-5 pb-3 border-b sticky top-0 bg-white z-10 sm:px-6 sm:pt-6">
+          <DialogTitle className="flex items-center gap-2 text-xl sm:text-2xl">
+            <div className="w-9 h-9 rounded-lg bg-slate-950 flex shrink-0 items-center justify-center"><Inbox className="w-5 h-5 text-white" /></div>
             {cloneSource ? 'Clone DM Auto-Reply' : 'DM Auto-Reply'}
           </DialogTitle>
           <DialogDescription>
@@ -544,10 +568,10 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
           </DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 py-4 space-y-8">
+        <div className="px-4 py-4 space-y-6 sm:px-6 sm:space-y-8">
           <div className="space-y-3">
             <SectionHeader icon={Instagram} step="1" title="Instagram Account" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 ml-11">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:ml-11">
               {accounts.map((a) => (
                 <button key={a.id} onClick={() => setSelectedAccount(a.id)}
                   className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-slate-950 bg-slate-50 shadow-sm' : 'border-border hover:border-slate-300'}`}>
@@ -563,8 +587,8 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
           {selectedAccount && (
             <div className="space-y-3">
               <SectionHeader icon={Sparkles} step="2" title="When user sends DM" subtitle="Keywords Komentra listens for in direct messages." />
-              <div className="ml-11 space-y-3">
-                <div className="flex items-center gap-2">
+              <div className="space-y-3 sm:ml-11">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Input value={kwInput} onChange={(e) => setKwInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addKeyword(); } }}
                     placeholder='e.g. "info"  →  press Enter' className="flex-1" />
@@ -580,10 +604,10 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
                     ))}
                   </div>
                 )}
-                <div className="flex items-center gap-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                   <Label className="text-sm">Match:</Label>
                   <Select value={matchType} onValueChange={setMatchType}>
-                    <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="contains">Contains keyword</SelectItem>
                       <SelectItem value="exact">Exact match</SelectItem>
@@ -598,7 +622,7 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
           {selectedAccount && (
             <div className="space-y-3">
               <SectionHeader icon={Shuffle} step="3" title="Reply Variants" subtitle="Up to 3. Random selection for natural variety." />
-              <div className="ml-11 space-y-2">
+              <div className="space-y-2 sm:ml-11">
                 {replies.map((r, i) => (
                   <div key={i} className="flex items-start gap-2">
                     <span className="text-xs font-mono text-muted-foreground pt-3">#{i + 1}</span>
@@ -614,12 +638,12 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
           {selectedAccount && (
             <div className="space-y-3">
               <SectionHeader icon={LinkIcon} step="4" title="Link Buttons (optional)" subtitle="Add up to 3 link buttons to the reply." />
-              <div className="ml-11 space-y-2">
+              <div className="space-y-2 sm:ml-11">
                 {buttons.map((b, i) => (
-                  <div key={i} className="flex items-center gap-2 rounded-lg border p-2 bg-white">
-                    <Input value={b.title || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], title: e.target.value }; setButtons(n); }} placeholder="Button text" className="flex-1" />
-                    <Input value={b.url || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], url: e.target.value }; setButtons(n); }} placeholder="https://..." className="flex-[1.5]" />
-                    <Button type="button" size="icon" variant="ghost" onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))}><X className="w-4 h-4 text-rose-500" /></Button>
+                  <div key={i} className="grid gap-2 rounded-lg border p-2 bg-white sm:grid-cols-[1fr_1.5fr_auto] sm:items-center">
+                    <Input value={b.title || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], title: e.target.value }; setButtons(n); }} placeholder="Button text" className="min-w-0" />
+                    <Input value={b.url || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], url: e.target.value }; setButtons(n); }} placeholder="https://..." className="min-w-0" />
+                    <Button type="button" size="icon" variant="ghost" onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))} className="justify-self-end"><X className="w-4 h-4 text-rose-500" /></Button>
                   </div>
                 ))}
                 {buttons.length < 3 && (
@@ -634,12 +658,12 @@ function CreateDmReplyDialog({ open, onOpenChange, accounts, token, workspaceId,
           {selectedAccount && (
             <div className="space-y-3">
               <SectionHeader icon={Zap} step="5" title="Name (optional)" />
-              <div className="ml-11"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={keywords[0] || 'My DM auto-reply'} /></div>
+              <div className="sm:ml-11"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={keywords[0] || 'My DM auto-reply'} /></div>
             </div>
           )}
         </div>
 
-        <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
+        <DialogFooter className="px-4 py-4 border-t bg-slate-50 sticky bottom-0 sm:px-6">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={create} disabled={saving || !canCreate} className="bg-slate-950 hover:bg-slate-800">
             {saving ? 'Creating...' : <>{cloneSource ? 'Create Clone' : 'Create DM Reply'} <ChevronRight className="w-4 h-4 ml-1" /></>}
@@ -668,6 +692,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
   const [askToFollow, setAskToFollow] = useState(false);
   const [followMessage, setFollowMessage] = useState('');
   const [followButtonText, setFollowButtonText] = useState('I Followed');
+  const [respondToPostShares, setRespondToPostShares] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -690,6 +715,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
     setAskToFollow(!!automation.askToFollow);
     setFollowMessage(automation.followMessage || '');
     setFollowButtonText(automation.followButtonText || 'I Followed');
+    setRespondToPostShares(!!automation.respondToPostShares);
   }, [automation]);
 
   useEffect(() => {
@@ -735,6 +761,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
         payload.dmText = dmText.trim();
         payload.dmButtons = validButtons;
         payload.askToFollow = askToFollow;
+        payload.respondToPostShares = respondToPostShares;
         payload.followMessage = askToFollow ? followMessage.trim() : null;
         payload.followButtonText = askToFollow ? (followButtonText.trim() || 'I Followed') : null;
       }
@@ -763,10 +790,10 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onOpenChange(false); }}>
-      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0">
-        <DialogHeader className="px-6 pt-6 pb-3 border-b sticky top-0 bg-white z-10">
-          <DialogTitle className="flex items-center gap-2 text-2xl">
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-slate-950">
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-3xl max-h-[92vh] overflow-y-auto p-0">
+        <DialogHeader className="px-4 pt-5 pb-3 border-b sticky top-0 bg-white z-10 sm:px-6 sm:pt-6">
+          <DialogTitle className="flex items-center gap-2 text-xl sm:text-2xl">
+            <div className="w-9 h-9 rounded-lg flex shrink-0 items-center justify-center bg-slate-950">
               {isDmReply ? <Inbox className="w-5 h-5 text-white" /> : <MessageCircle className="w-5 h-5 text-white" />}
             </div>
             Edit Automation
@@ -774,12 +801,18 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
           <DialogDescription>{isDmReply ? 'Update the DM keyword reply settings.' : 'Update the comment automation settings.'}</DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 py-4 space-y-7">
+        <div className="px-4 py-4 space-y-6 sm:px-6 sm:space-y-7">
           <div className="space-y-3">
             <SectionHeader icon={Instagram} step="1" title="Instagram Account" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 ml-11">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:ml-11">
               {accounts.map((a) => (
-                <button key={a.id} onClick={() => { setSelectedAccount(a.id); if (!isDmReply) setSelectedPost(null); }}
+                <button key={a.id} onClick={() => {
+                  setSelectedAccount(a.id);
+                  if (!isDmReply) {
+                    setSelectedPost(null);
+                    setRespondToPostShares(false);
+                  }
+                }}
                   className={`p-3 rounded-xl border-2 text-left transition ${selectedAccount === a.id ? 'border-slate-950 bg-slate-50 shadow-sm' : 'border-border hover:border-slate-300'}`}>
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-full bg-slate-950 flex items-center justify-center"><Instagram className="w-4 h-4 text-white" /></div>
@@ -793,11 +826,37 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
           {!isDmReply && selectedAccount && (
             <div className="space-y-3">
               <SectionHeader icon={Hash} step="2" title="Post" subtitle="Choose the post this automation watches." />
-              <div className="ml-11">
+              <div className="sm:ml-11">
                 {loadingMedia ? <p className="text-sm text-muted-foreground">Loading posts...</p>
                 : media.length === 0 ? <p className="text-sm text-muted-foreground">No posts found.</p>
                 : (
-                  <PostPickerGrid media={media} selectedPost={selectedPost} onSelect={setSelectedPost} />
+                  <PostPickerGrid
+                    media={media}
+                    selectedPost={selectedPost}
+                    onSelect={(post) => { setSelectedPost(post); if (!post?.permalink) setRespondToPostShares(false); }}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
+          {!isDmReply && selectedPost && (
+            <div className="space-y-3">
+              <SectionHeader icon={Send} step="2A" title="Shared Post DM" subtitle="Optionally respond when this exact post is sent to your inbox." />
+              <div className="rounded-xl border bg-slate-50 p-4 sm:ml-11">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="font-medium text-sm">Reply when this post is shared in DM</p>
+                    <p className="text-xs text-muted-foreground">Uses the configured DM and does not publish a comment reply.</p>
+                  </div>
+                  <Switch
+                    checked={respondToPostShares}
+                    disabled={!selectedPost?.permalink}
+                    onCheckedChange={setRespondToPostShares}
+                  />
+                </div>
+                {!selectedPost?.permalink && (
+                  <p className="mt-2 text-xs text-amber-700">A valid Instagram permalink is required to enable this trigger.</p>
                 )}
               </div>
             </div>
@@ -805,8 +864,8 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
 
           <div className="space-y-3">
             <SectionHeader icon={Sparkles} step={isDmReply ? '2' : '3'} title={isDmReply ? 'When user sends DM' : 'When user comments'} subtitle="Add the keywords that should trigger this automation." />
-            <div className="ml-11 space-y-3">
-              <div className="flex items-center gap-2">
+            <div className="space-y-3 sm:ml-11">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Input value={kwInput} onChange={(e) => setKwInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addKeyword(); } }}
                   placeholder='e.g. "price"' className="flex-1" />
@@ -822,10 +881,10 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
                   ))}
                 </div>
               )}
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                 <Label className="text-sm">Keyword match:</Label>
                 <Select value={matchType} onValueChange={setMatchType}>
-                  <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="contains">Contains keyword</SelectItem>
                     <SelectItem value="exact">Exact match</SelectItem>
@@ -838,7 +897,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
 
           <div className="space-y-3">
             <SectionHeader icon={Shuffle} step={isDmReply ? '3' : '4'} title={isDmReply ? 'DM Reply' : 'Public Reply'} subtitle="Add up to 3 reply variants." />
-            <div className="ml-11 space-y-2">
+            <div className="space-y-2 sm:ml-11">
               {replies.map((r, i) => (
                 <div key={i} className="flex items-start gap-2">
                   <span className="text-xs font-mono text-muted-foreground pt-3">#{i + 1}</span>
@@ -853,8 +912,8 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
             <>
               <div className="space-y-3">
                 <SectionHeader icon={UserPlus} step="5" title="Ask To Follow First" />
-                <div className="ml-11 rounded-xl border bg-slate-50 p-4 space-y-3">
-                  <div className="flex items-center justify-between">
+                <div className="rounded-xl border bg-slate-50 p-4 space-y-3 sm:ml-11">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="font-medium text-sm">Require user to follow first</p>
                       <p className="text-xs text-muted-foreground">Send the main DM after follow verification.</p>
@@ -872,7 +931,7 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
 
               <div className="space-y-3">
                 <SectionHeader icon={Send} step="6" title="Direct Message" />
-                <div className="ml-11 space-y-3">
+                <div className="space-y-3 sm:ml-11">
                   <Textarea value={dmText} onChange={(e) => setDmText(e.target.value)} placeholder="Write the DM..." rows={3} />
                 </div>
               </div>
@@ -881,12 +940,12 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
 
           <div className="space-y-3">
             <SectionHeader icon={LinkIcon} step={isDmReply ? '4' : '7'} title="Link Buttons" subtitle="Optional, up to 3 links." />
-            <div className="ml-11 space-y-2">
+            <div className="space-y-2 sm:ml-11">
               {buttons.map((b, i) => (
-                <div key={i} className="flex items-center gap-2 rounded-lg border p-2 bg-white">
-                  <Input value={b.title || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], title: e.target.value }; setButtons(n); }} placeholder="Button text" className="flex-1" />
-                  <Input value={b.url || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], url: e.target.value }; setButtons(n); }} placeholder="https://..." className="flex-[1.5]" />
-                  <Button type="button" size="icon" variant="ghost" onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))}><X className="w-4 h-4 text-rose-500" /></Button>
+                <div key={i} className="grid gap-2 rounded-lg border p-2 bg-white sm:grid-cols-[1fr_1.5fr_auto] sm:items-center">
+                  <Input value={b.title || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], title: e.target.value }; setButtons(n); }} placeholder="Button text" className="min-w-0" />
+                  <Input value={b.url || ''} onChange={(e) => { const n = [...buttons]; n[i] = { ...n[i], url: e.target.value }; setButtons(n); }} placeholder="https://..." className="min-w-0" />
+                  <Button type="button" size="icon" variant="ghost" onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))} className="justify-self-end"><X className="w-4 h-4 text-rose-500" /></Button>
                 </div>
               ))}
               {buttons.length < 3 && (
@@ -899,11 +958,11 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
 
           <div className="space-y-3">
             <SectionHeader icon={Zap} step={isDmReply ? '5' : '8'} title="Name" />
-            <div className="ml-11"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={keywords[0] || 'Automation name'} /></div>
+            <div className="sm:ml-11"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={keywords[0] || 'Automation name'} /></div>
           </div>
         </div>
 
-        <DialogFooter className="px-6 py-4 border-t bg-slate-50 sticky bottom-0">
+        <DialogFooter className="px-4 py-4 border-t bg-slate-50 sticky bottom-0 sm:px-6">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={save} disabled={saving || !canSave} className="bg-slate-950 hover:bg-slate-800">
             {saving ? 'Saving...' : 'Save changes'}
@@ -961,6 +1020,7 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, onClone, disa
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="hidden font-semibold text-lg leading-tight sm:block">{a.name || keywords[0] || 'Automation'}</h3>
                   {typeBadge}
+                  {!isDmReply && a.respondToPostShares && <Badge className="bg-violet-100 text-violet-700 text-xs">Shared-post DM</Badge>}
                   {acct && <Badge variant="outline" className="text-xs">@{acct.username}</Badge>}
                   {a.postPermalink && <a href={a.postPermalink} target="_blank" rel="noreferrer" className="hidden text-xs text-slate-700 hover:underline sm:inline-flex sm:items-center sm:gap-1">View Post <ExternalLink className="w-3 h-3" /></a>}
                 </div>
