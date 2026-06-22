@@ -100,8 +100,8 @@ Set these on both the web service and the worker unless noted.
 | `META_APP_SECRET` | web, worker recommended | Meta Instagram app secret |
 | `WEBHOOK_VERIFY_TOKEN` | web | Same token configured in Meta Webhooks |
 | `META_API_VERSION` | web, worker | Use one value consistently, for example `v23.0` |
-| `RESEND_API_KEY` | web | Required for OTP email |
-| `EMAIL_FROM` | web | Verified Resend sender, for example `ReplyPilot <no-reply@yourdomain.com>` |
+| `RESEND_API_KEY` | web, worker | Required for OTP and automation pause emails |
+| `EMAIL_FROM` | web, worker | Verified Resend sender, for example `ReplyPilot <no-reply@yourdomain.com>` |
 | `CORS_ORIGINS` | web | Prefer your exact domain over `*` |
 | `WORKER_CONCURRENCY` | worker | Start with `8`, increase after observing rate limits |
 
@@ -409,4 +409,3 @@ At that point, move the same container image to ECS Fargate:
 - ALB in front of web service
 - CloudWatch alarms and autoscaling policies
 - ElastiCache Redis and MongoDB Atlas unchanged
-

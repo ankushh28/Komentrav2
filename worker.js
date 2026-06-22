@@ -8,11 +8,16 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { Worker } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { MongoClient } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { tryConsumeTriggerQuota } from './lib/entitlements.js';
+import { sendAutomationPauseEmail } from './lib/email.js';
+import {
+  AUTOMATION_PAUSE_TYPES,
+  accountSendLimitKey,
+} from './lib/automation-pause.js';
 import {
   GRAPH_ERROR_CLASSIFICATIONS,
   classifyGraphError,
@@ -497,10 +502,155 @@ function shouldPauseForGraphError(error) {
   return shouldPauseAccountForGraphError(error);
 }
 
-async function pauseAccountForGraphRisk(dbi, acct, error) {
+function inactivePauseClauses(field, now = new Date()) {
+  return [
+    { [field]: { $exists: false } },
+    { [field]: null },
+    { [field]: { $lte: now } },
+  ];
+}
+
+async function queuePauseNotification(dbi, {
+  scope,
+  type,
+  acct,
+  automationId = null,
+  reason,
+  pausedUntil,
+}) {
+  try {
+    let auto = automationId
+      ? await dbi.collection('automations').findOne({ _id: automationId })
+      : null;
+    if (!auto && acct?._id) {
+      auto = await dbi.collection('automations').findOne(
+        { instagramAccountId: acct._id, isActive: true },
+        { sort: { updatedAt: -1 } },
+      );
+    }
+    const userId = auto?.userId || acct?.connectedUserId;
+    const user = userId ? await dbi.collection('users').findOne({ _id: userId }) : null;
+    if (!user?.email || !acct?._id || !pausedUntil) {
+      logAutomation('pause-email', 'notification skipped because owner or pause context is missing', {
+        instagramAccountId: acct?._id || null,
+        automationId: auto?._id || automationId,
+        hasEmail: !!user?.email,
+      });
+      return;
+    }
+
+    const workspaceId = auto?.workspaceId || acct.workspaceId || null;
+    const affectedAutomationCount = scope === 'account'
+      ? await dbi.collection('automations').countDocuments({ instagramAccountId: acct._id, isActive: true })
+      : 1;
+    const baseUrl = String(process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/$/, '');
+    const params = new URLSearchParams();
+    if (workspaceId) params.set('workspaceId', workspaceId);
+    if (auto?._id) params.set('automationId', auto._id);
+    const dashboardUrl = baseUrl ? `${baseUrl}/dashboard?${params.toString()}` : '';
+    const pauseDate = new Date(pausedUntil);
+    const identity = `${scope}|${scope === 'account' ? acct._id : auto?._id}|${type}|${pauseDate.toISOString()}`;
+    const notificationId = `pause-${crypto.createHash('sha256').update(identity).digest('hex')}`;
+    const now = new Date();
+    const doc = {
+      _id: notificationId,
+      type: 'automation_pause_email',
+      status: 'pending',
+      scope,
+      pauseType: type,
+      reason,
+      pausedUntil: pauseDate,
+      userId,
+      toEmail: user.email,
+      workspaceId,
+      instagramAccountId: acct._id,
+      instagramUsername: acct.username || null,
+      automationId: auto?._id || automationId,
+      automationName: auto?.name || auto?.triggerWord || auto?.keywords?.[0] || 'Instagram automation',
+      automationType: auto?.type || null,
+      postPermalink: auto?.postPermalink || null,
+      postThumbnail: auto?.postThumbnail || null,
+      affectedAutomationCount,
+      canReset: type === AUTOMATION_PAUSE_TYPES.INTERNAL_SEND_LIMIT,
+      dashboardUrl,
+      createdAt: now,
+      updatedAt: now,
+      attempts: 0,
+    };
+
+    try {
+      await dbi.collection('automation_pause_notifications').insertOne(doc);
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+    }
+    await notificationQueue.add('automation-pause-email', { notificationId }, {
+      jobId: notificationId,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: { age: 60 * 60 * 24 * 7, count: 5000 },
+      removeOnFail: { age: 60 * 60 * 24 * 30 },
+    });
+  } catch (error) {
+    logAutomation('pause-email', 'notification enqueue failed', {
+      instagramAccountId: acct?._id || null,
+      automationId,
+      error: error?.message,
+    });
+  }
+}
+
+async function processPauseEmailJob(job, dbi) {
+  const notificationId = job.data?.notificationId;
+  const collection = dbi.collection('automation_pause_notifications');
+  const notification = notificationId ? await collection.findOne({ _id: notificationId }) : null;
+  if (!notification || notification.status === 'sent') return;
+
+  await collection.updateOne(
+    { _id: notificationId },
+    { $set: { status: 'sending', updatedAt: new Date() }, $inc: { attempts: 1 } },
+  );
+  try {
+    const result = await sendAutomationPauseEmail(notification.toEmail, {
+      ...notification,
+      resumeAtLabel: new Intl.DateTimeFormat('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: 'UTC',
+        timeZoneName: 'short',
+      }).format(new Date(notification.pausedUntil)),
+    });
+    if (result?.error) throw new Error(result.error.message || 'Resend rejected pause notification');
+    await collection.updateOne(
+      { _id: notificationId },
+      {
+        $set: {
+          status: 'sent',
+          sentAt: new Date(),
+          providerResponse: result?.data || result || null,
+          updatedAt: new Date(),
+        },
+        $unset: { lastError: '' },
+      },
+    );
+  } catch (error) {
+    await collection.updateOne(
+      { _id: notificationId },
+      { $set: { status: 'failed', lastError: serializeError(error), updatedAt: new Date() } },
+    );
+    throw error;
+  }
+}
+
+async function pauseAccountForGraphRisk(dbi, acct, error, details = {}) {
   if (!acct?._id || !shouldPauseForGraphError(error)) return;
   const fallbackMinutes = parsePositiveInt(process.env.GRAPH_ERROR_PAUSE_MINUTES, 60);
   const rateLimit = error?.rateLimit || null;
+  const pauseType = rateLimit
+    ? AUTOMATION_PAUSE_TYPES.META_RATE_LIMIT
+    : AUTOMATION_PAUSE_TYPES.OTHER;
   const pausedUntil = getMetaRateLimitPauseUntil(rateLimit, fallbackMinutes);
   const reason = rateLimit
     ? metaRateLimitReason({
@@ -509,22 +659,33 @@ async function pauseAccountForGraphRisk(dbi, acct, error) {
         highestUsage: rateLimit.highestUsage,
       }, META_RATE_LIMIT_STATES.LIMITED)
     : (error?.message || 'Instagram Graph API rejected automation send');
-  await dbi.collection('instagram_accounts').updateOne(
-    { _id: acct._id },
+  const transition = await dbi.collection('instagram_accounts').updateOne(
+    { _id: acct._id, $or: inactivePauseClauses('automationPausedUntil') },
     {
       $set: {
         automationPausedUntil: pausedUntil,
         automationPauseReason: reason,
         metaRateLimitPausedUntil: pausedUntil,
         metaRateLimitPauseReason: reason,
+        automationPauseType: pauseType,
         updatedAt: new Date(),
       },
     },
   );
+  if (transition.modifiedCount !== 1) return;
   acct.automationPausedUntil = pausedUntil;
   acct.automationPauseReason = reason;
   acct.metaRateLimitPausedUntil = pausedUntil;
   acct.metaRateLimitPauseReason = reason;
+  acct.automationPauseType = pauseType;
+  await queuePauseNotification(dbi, {
+    scope: 'account',
+    type: pauseType,
+    acct,
+    automationId: details.automationId,
+    reason,
+    pausedUntil,
+  });
 }
 
 async function recordMetaRateLimitUsage(dbi, acct, result, flow, details = {}) {
@@ -540,6 +701,7 @@ async function recordMetaRateLimitUsage(dbi, acct, result, flow, details = {}) {
     updatedAt: observedAt,
   };
 
+  let pauseNotification = null;
   if (state !== META_RATE_LIMIT_STATES.NORMAL) {
     const fallbackMinutes = state === META_RATE_LIMIT_STATES.NEAR_LIMIT
       ? META_RATE_LIMIT_NEAR_PAUSE_MINUTES
@@ -550,6 +712,8 @@ async function recordMetaRateLimitUsage(dbi, acct, result, flow, details = {}) {
     set.automationPauseReason = reason;
     set.metaRateLimitPausedUntil = pausedUntil;
     set.metaRateLimitPauseReason = reason;
+    set.automationPauseType = AUTOMATION_PAUSE_TYPES.META_RATE_LIMIT;
+    pauseNotification = { reason, pausedUntil };
 
     logAutomation(flow, 'account paused by Meta rate-limit header', {
       instagramAccountId: acct._id,
@@ -561,11 +725,41 @@ async function recordMetaRateLimitUsage(dbi, acct, result, flow, details = {}) {
     });
   }
 
-  await dbi.collection('instagram_accounts').updateOne(
-    { _id: acct._id },
-    { $set: set },
-  );
-  Object.assign(acct, set);
+  let ownsPauseTransition = false;
+  if (pauseNotification) {
+    const transition = await dbi.collection('instagram_accounts').updateOne(
+      { _id: acct._id, $or: inactivePauseClauses('automationPausedUntil', observedAt) },
+      { $set: set },
+    );
+    ownsPauseTransition = transition.modifiedCount === 1;
+    if (!ownsPauseTransition) {
+      await dbi.collection('instagram_accounts').updateOne(
+        { _id: acct._id },
+        {
+          $set: {
+            metaRateLimitUsage: usage,
+            metaRateLimitObservedAt: observedAt,
+            updatedAt: observedAt,
+          },
+        },
+      );
+    }
+  } else {
+    await dbi.collection('instagram_accounts').updateOne(
+      { _id: acct._id },
+      { $set: set },
+    );
+  }
+  if (ownsPauseTransition) Object.assign(acct, set);
+  if (ownsPauseTransition && pauseNotification) {
+    await queuePauseNotification(dbi, {
+      scope: 'account',
+      type: AUTOMATION_PAUSE_TYPES.META_RATE_LIMIT,
+      acct,
+      automationId: details.automationId,
+      ...pauseNotification,
+    });
+  }
 }
 
 function automationPauseState(auto) {
@@ -609,16 +803,19 @@ async function pauseAutomationForObjectFailures(dbi, auto, acct, details = {}) {
   });
   if (count < threshold) return false;
 
-  await dbi.collection('automations').updateOne(
-    { _id: auto._id },
+  const pausedUntil = new Date(Date.now() + pauseMinutes * 60 * 1000);
+  const reason = `${threshold}+ unavailable Instagram comment objects in ${windowMinutes} minutes`;
+  const transition = await dbi.collection('automations').updateOne(
+    { _id: auto._id, $or: inactivePauseClauses('automationPausedUntil') },
     {
       $set: {
-        automationPausedUntil: new Date(Date.now() + pauseMinutes * 60 * 1000),
-        automationPauseReason: `${threshold}+ unavailable Instagram comment objects in ${windowMinutes} minutes`,
+        automationPausedUntil: pausedUntil,
+        automationPauseReason: reason,
         updatedAt: new Date(),
       },
     },
   );
+  if (transition.modifiedCount !== 1) return false;
   logAutomation('comment-dm', 'automation paused by object-unavailable guard', {
     automationId: auto._id,
     instagramAccountId: acct._id,
@@ -627,6 +824,14 @@ async function pauseAutomationForObjectFailures(dbi, auto, acct, details = {}) {
     windowMinutes,
     pauseMinutes,
     ...details,
+  });
+  await queuePauseNotification(dbi, {
+    scope: 'automation',
+    type: AUTOMATION_PAUSE_TYPES.AUTOMATION_FAILURE,
+    acct,
+    automationId: auto._id,
+    reason,
+    pausedUntil,
   });
   return true;
 }
@@ -644,17 +849,20 @@ async function assertCanSendForAccount(dbi, acct, flow, details = {}) {
   }
 
   const windowSeconds = 60 * 60;
-  const key = `rate:${acct._id}:${Math.floor(Date.now() / (windowSeconds * 1000))}`;
+  const key = accountSendLimitKey(acct._id);
   const count = await redis.incr(key);
   if (count === 1) await redis.expire(key, windowSeconds + 60);
   if (count > ACCOUNT_SEND_LIMIT_PER_HOUR) {
     const minutes = parsePositiveInt(process.env.RATE_LIMIT_PAUSE_MINUTES, 60);
-    await dbi.collection('instagram_accounts').updateOne(
-      { _id: acct._id },
+    const pausedUntil = new Date(Date.now() + minutes * 60 * 1000);
+    const reason = `Per-account send limit exceeded (${ACCOUNT_SEND_LIMIT_PER_HOUR}/hour)`;
+    const result = await dbi.collection('instagram_accounts').updateOne(
+      { _id: acct._id, $or: inactivePauseClauses('automationPausedUntil') },
       {
         $set: {
-          automationPausedUntil: new Date(Date.now() + minutes * 60 * 1000),
-          automationPauseReason: `Per-account send limit exceeded (${ACCOUNT_SEND_LIMIT_PER_HOUR}/hour)`,
+          automationPausedUntil: pausedUntil,
+          automationPauseReason: reason,
+          automationPauseType: AUTOMATION_PAUSE_TYPES.INTERNAL_SEND_LIMIT,
           updatedAt: new Date(),
         },
       },
@@ -665,6 +873,18 @@ async function assertCanSendForAccount(dbi, acct, flow, details = {}) {
       count,
       ...details,
     });
+    if (result.modifiedCount > 0) {
+      acct.automationPausedUntil = pausedUntil;
+      acct.automationPauseReason = reason;
+      await queuePauseNotification(dbi, {
+        scope: 'account',
+        type: AUTOMATION_PAUSE_TYPES.INTERNAL_SEND_LIMIT,
+        acct,
+        automationId: details.automationId,
+        reason,
+        pausedUntil,
+      });
+    }
     return false;
   }
   return true;
@@ -913,7 +1133,7 @@ async function processInstagramPostShare({ dbi, job, msg, igUserId, senderId, re
     await markDeliverySent(dbi, deliveryKey, { dmResult, sharedPostUrl: share.url });
   } catch (e) {
     await markDeliveryFailed(dbi, deliveryKey, e);
-    await pauseAccountForGraphRisk(dbi, acct, e);
+    await pauseAccountForGraphRisk(dbi, acct, e, { automationId: auto._id });
     logAutomation('post-share-dm', 'send failed after delivery claim', {
       jobId: job.id,
       automationId: auto._id,
@@ -978,8 +1198,12 @@ async function processInstagramPostShare({ dbi, job, msg, igUserId, senderId, re
 
 // ---- Job processor ----
 async function processJob(job) {
-  const body = job.data;
   const dbi = await db();
+  if (job.name === 'automation-pause-email') {
+    await processPauseEmailJob(job, dbi);
+    return;
+  }
+  const body = job.data;
   logAutomation('job', 'received', {
     jobId: job.id,
     object: body?.object,
@@ -1250,7 +1474,7 @@ async function processJob(job) {
           }
         } catch (e) {
           await markDeliveryFailed(dbi, deliveryKey, e);
-          await pauseAccountForGraphRisk(dbi, acct, e);
+          await pauseAccountForGraphRisk(dbi, acct, e, { automationId: auto._id });
           if ((e?.graphClassification || classifyGraphError(e)) === GRAPH_ERROR_CLASSIFICATIONS.OBJECT_UNAVAILABLE) {
             await pauseAutomationForObjectFailures(dbi, auto, acct, {
               jobId: job.id,
@@ -1466,7 +1690,7 @@ async function processJob(job) {
           await markDeliverySent(dbi, deliveryKey, { retryResult: retry, followCheck });
           } catch (e) {
             await markDeliveryFailed(dbi, deliveryKey, e);
-            await pauseAccountForGraphRisk(dbi, acct, e);
+            await pauseAccountForGraphRisk(dbi, acct, e, { automationId });
             logAutomation('follow-gate', 'send failed after delivery claim', {
               jobId: job.id,
               automationId,
@@ -1572,7 +1796,7 @@ async function processJob(job) {
         await markDeliverySent(dbi, deliveryKey, { dmResult: rDM, followCheck });
         } catch (e) {
           await markDeliveryFailed(dbi, deliveryKey, e);
-          await pauseAccountForGraphRisk(dbi, acct, e);
+          await pauseAccountForGraphRisk(dbi, acct, e, { automationId });
           logAutomation('follow-gate', 'send failed after delivery claim', {
             jobId: job.id,
             automationId,
@@ -1781,7 +2005,7 @@ async function processJob(job) {
           await markDeliverySent(dbi, deliveryKey, { dmResult: r });
           } catch (e) {
             await markDeliveryFailed(dbi, deliveryKey, e);
-            await pauseAccountForGraphRisk(dbi, acct, e);
+            await pauseAccountForGraphRisk(dbi, acct, e, { automationId: auto._id });
             logAutomation('dm-auto-reply', 'send failed after delivery claim', {
               jobId: job.id,
               automationId: auto._id,
@@ -1864,6 +2088,7 @@ const worker = new Worker(QUEUE_NAME, processJob, {
   connection: redis,
   concurrency: parseInt(process.env.WORKER_CONCURRENCY || '8', 10),
 });
+const notificationQueue = new Queue(QUEUE_NAME, { connection: redis });
 
 worker.on('completed', (job) => console.log(`[worker] job ${job.id} done`));
 worker.on('failed', (job, err) => console.error(`[worker] job ${job?.id} failed:`, err.message));
@@ -1871,6 +2096,7 @@ worker.on('error', (e) => console.error('[worker] error', e?.message));
 
 console.log('[worker] started, concurrency =', worker.opts.concurrency, JSON.stringify({
   automationsPaused: envFlag('AUTOMATIONS_PAUSED'),
+  pauseEmailNotificationsEnabled: !!process.env.RESEND_API_KEY,
   dmCooldownSeconds: DM_COOLDOWN_SECONDS,
   followRetryCooldownSeconds: FOLLOW_RETRY_COOLDOWN_SECONDS,
   accountSendLimitPerHour: ACCOUNT_SEND_LIMIT_PER_HOUR,

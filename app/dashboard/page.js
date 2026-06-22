@@ -54,6 +54,16 @@ function runLabel(count = 0) {
   return `${count} ${count === 1 ? 'run' : 'runs'}`;
 }
 
+function pauseTimeLabel(value) {
+  if (!value) return 'the scheduled time';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'the scheduled time';
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
 function mediaPreviewSrc(media) {
   if (!media) return null;
   if (media.thumbnail_url) return media.thumbnail_url;
@@ -973,8 +983,9 @@ function EditAutomationDialog({ automation, accounts, token, workspaceId, onOpen
   );
 }
 
-function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, onClone, disabledActions = false }) {
+function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, onClone, disabledActions = false, highlighted = false }) {
   const acct = accounts.find(x => x.id === a.instagramAccountId);
+  const pause = a.pause?.paused ? a.pause : (acct?.pause?.paused ? acct.pause : null);
   const keywords = keywordList(a);
   const isDmReply = a.type === 'dm_reply';
   const accentBorder = isDmReply ? 'border-l-sky-600' : 'border-l-slate-950';
@@ -997,7 +1008,7 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, onClone, disa
   );
 
   return (
-    <Card className={`hover:shadow-md transition-shadow border-l-4 ${accentBorder} bg-white`}>
+    <Card id={`automation-${a._id}`} className={`hover:shadow-md transition-all border-l-4 ${accentBorder} bg-white ${highlighted ? 'ring-2 ring-amber-400 shadow-md' : ''}`}>
       <CardContent className="p-4 sm:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
           <div className="flex items-start gap-3 sm:block">
@@ -1020,6 +1031,7 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, onClone, disa
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="hidden font-semibold text-lg leading-tight sm:block">{a.name || keywords[0] || 'Automation'}</h3>
                   {typeBadge}
+                  {pause && <Badge className="bg-amber-100 text-amber-800 text-xs">Paused</Badge>}
                   {!isDmReply && a.respondToPostShares && <Badge className="bg-violet-100 text-violet-700 text-xs">Shared-post DM</Badge>}
                   {acct && <Badge variant="outline" className="text-xs">@{acct.username}</Badge>}
                   {a.postPermalink && <a href={a.postPermalink} target="_blank" rel="noreferrer" className="hidden text-xs text-slate-700 hover:underline sm:inline-flex sm:items-center sm:gap-1">View Post <ExternalLink className="w-3 h-3" /></a>}
@@ -1028,6 +1040,12 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, onClone, disa
                   <span className="text-sm font-medium text-slate-700">{triggerLabel(a)} {matchLabel(a.matchType)}</span>
                   {keywords.slice(0, 5).map(k => <Badge key={k} className="bg-slate-100 text-slate-700 text-sm">{k}</Badge>)}
                 </div>
+                {pause && (
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    <p className="font-semibold">Sending is temporarily paused</p>
+                    <p className="mt-0.5 text-xs leading-relaxed">{pause.reason} Resumes after {pauseTimeLabel(pause.pausedUntil)}.</p>
+                  </div>
+                )}
               </div>
               <div className="hidden sm:block">{statusControl}</div>
             </div>
@@ -1202,6 +1220,9 @@ export default function DashboardPage() {
   const [automationSearch, setAutomationSearch] = useState('');
   const [automationStatusFilter, setAutomationStatusFilter] = useState('all');
   const [cloningAutomation, setCloningAutomation] = useState(null);
+  const [pauseResetAccount, setPauseResetAccount] = useState(null);
+  const [resettingPause, setResettingPause] = useState(false);
+  const [highlightedAutomationId, setHighlightedAutomationId] = useState('');
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -1274,13 +1295,24 @@ export default function DashboardPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const workspaceId = params.get('workspaceId');
+    const automationId = params.get('automationId');
     if (workspaceId) {
       localStorage.setItem('selectedWorkspaceId', workspaceId);
       setSelectedWorkspaceId(workspaceId);
     }
+    if (automationId) setHighlightedAutomationId(automationId);
     if (params.get('ig') === 'success') { toast.success('Instagram account connected!'); window.history.replaceState({}, '', '/dashboard'); loadWorkspaces(workspaceId || ''); refresh(); }
     else if (params.get('ig') === 'error') { toast.error('Connection failed: ' + (params.get('msg') || 'unknown')); window.history.replaceState({}, '', '/dashboard'); }
   }, [loadWorkspaces, refresh]);
+
+  useEffect(() => {
+    if (!highlightedAutomationId || !automations.some(a => a._id === highlightedAutomationId)) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById(`automation-${highlightedAutomationId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+    const clear = window.setTimeout(() => setHighlightedAutomationId(''), 5000);
+    return () => { window.clearTimeout(timer); window.clearTimeout(clear); };
+  }, [automations, highlightedAutomationId]);
 
   const onLogout = () => {
     localStorage.removeItem('token'); localStorage.removeItem('user');
@@ -1354,6 +1386,26 @@ export default function DashboardPage() {
       if (!isSessionExpiredError(e)) toast.error(e.message);
     } finally {
       setResubscribingAccountId('');
+    }
+  };
+
+  const resetSendLimit = async () => {
+    if (!pauseResetAccount) return;
+    setResettingPause(true);
+    try {
+      const res = await authFetch(router, `/api/instagram/accounts/${pauseResetAccount.id}/reset-send-limit`, {
+        method: 'POST',
+        headers: scopedHeaders(token, selectedWorkspaceId),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to reset the send limit');
+      setPauseResetAccount(null);
+      await refresh();
+      toast.success('Send limit reset. Automations can send again.');
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to reset the send limit');
+    } finally {
+      setResettingPause(false);
     }
   };
 
@@ -1445,8 +1497,16 @@ export default function DashboardPage() {
   if (!token || !user) return null;
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId);
   const workspaceActive = (selectedWorkspace?.status || 'active') === 'active';
-  const activeCount = automations.filter(a => a.isActive).length;
+  const activeCount = automations.filter((a) => {
+    if (!a.isActive || a.pause?.paused) return false;
+    const acct = accounts.find(x => x.id === a.instagramAccountId);
+    return !acct?.pause?.paused;
+  }).length;
   const currentAccount = accounts[0] || null;
+  const accountPause = currentAccount?.pause?.paused ? currentAccount.pause : null;
+  const affectedAccountAutomations = accountPause
+    ? automations.filter(a => a.isActive && a.instagramAccountId === currentAccount.id).length
+    : 0;
   const normalizedSearch = automationSearch.trim().toLowerCase();
   const filteredAutomations = automations.filter((a) => {
     const matchesStatus =
@@ -1581,6 +1641,28 @@ export default function DashboardPage() {
           </Card>
         </div>
 
+        {accountPause && (
+          <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4 shadow-sm sm:p-5" role="alert">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex min-w-0 gap-3">
+                <div className="mt-0.5 rounded-full bg-amber-100 p-2 text-amber-800"><AlertTriangle className="h-5 w-5" /></div>
+                <div>
+                  <h2 className="font-bold text-amber-950">Automations for {currentAccount.username ? `@${currentAccount.username}` : 'this account'} are paused</h2>
+                  <p className="mt-1 text-sm leading-relaxed text-amber-900">{accountPause.reason}</p>
+                  <p className="mt-2 text-xs text-amber-800">
+                    {affectedAccountAutomations} active {affectedAccountAutomations === 1 ? 'automation is' : 'automations are'} affected. Scheduled to resume after {pauseTimeLabel(accountPause.pausedUntil)}. Skipped comments are not replayed.
+                  </p>
+                </div>
+              </div>
+              {accountPause.canReset && (
+                <Button className="shrink-0 bg-amber-900 text-white hover:bg-amber-800" onClick={() => setPauseResetAccount(currentAccount)}>
+                  <RefreshCw className="mr-2 h-4 w-4" /> Reset and resume
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
         <section>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-xl font-bold flex items-center gap-2"><Zap className="w-5 h-5 text-amber-500" /> Automations</h2>
@@ -1660,7 +1742,7 @@ export default function DashboardPage() {
                     </Card>
                   ) : (
                     <div className="space-y-3">
-                      {filteredAutomations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} onClone={startClone} disabledActions={!workspaceActive} />)}
+                      {filteredAutomations.map((a) => <AutomationCard key={a._id} a={a} accounts={accounts} onToggle={toggle} onDelete={remove} onEdit={setEditingAutomation} onClone={startClone} disabledActions={!workspaceActive} highlighted={highlightedAutomationId === a._id} />)}
                     </div>
                   )}
                 </>
@@ -1693,6 +1775,26 @@ export default function DashboardPage() {
       <CreateAutomationDialog open={showCreate} onOpenChange={(next) => { setShowCreate(next); if (!next) setCloningAutomation(null); }} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} cloneSource={cloningAutomation?.type !== 'dm_reply' ? cloningAutomation : null} />
       <CreateDmReplyDialog open={showCreateDmReply} onOpenChange={(next) => { setShowCreateDmReply(next); if (!next) setCloningAutomation(null); }} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onCreated={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} cloneSource={cloningAutomation?.type === 'dm_reply' ? cloningAutomation : null} />
       <EditAutomationDialog automation={editingAutomation} onOpenChange={() => setEditingAutomation(null)} accounts={accounts} token={token} workspaceId={selectedWorkspaceId} onSaved={() => { refresh(); loadBillingStatus(); }} onBillingBlocked={showBillingBlocked} />
+      <Dialog open={!!pauseResetAccount} onOpenChange={(open) => { if (!open && !resettingPause) setPauseResetAccount(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-600" /> Reset the send limit?</DialogTitle>
+            <DialogDescription className="pt-2 leading-relaxed">
+              This immediately resumes every active automation connected to {pauseResetAccount?.username ? `@${pauseResetAccount.username}` : 'this account'}. Continuing may increase the risk of Instagram temporarily restricting messages if activity remains high.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            Reset only if you understand the recent sending activity. Comments already skipped during the pause will not be replayed.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={resettingPause} onClick={() => setPauseResetAccount(null)}>Keep paused</Button>
+            <Button className="bg-amber-900 hover:bg-amber-800" disabled={resettingPause} onClick={resetSendLimit}>
+              {resettingPause && <RefreshCw className="mr-2 h-4 w-4 animate-spin" />}
+              {resettingPause ? 'Resetting...' : 'Reset and resume'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <WorkspaceSettingsDialog
         open={showWorkspaceSettings}
         onOpenChange={setShowWorkspaceSettings}

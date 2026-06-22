@@ -5,6 +5,14 @@ import { getDb } from '@/lib/mongo';
 import { hashPassword, comparePassword, signToken, getUserFromRequest } from '@/lib/auth';
 import { sendOtpEmail, generateOtp, sendPasswordResetOtpEmail, sendContactEmail } from '@/lib/email';
 import { getQueue } from '@/lib/queue';
+import { getRedis } from '@/lib/redis';
+import {
+  AUTOMATION_PAUSE_TYPES,
+  accountPauseStatus,
+  accountSendLimitKey,
+  automationPauseStatus,
+  publicPauseStatus,
+} from '@/lib/automation-pause';
 import { PLAN_IDS, getPlan, isPaidPlan, publicPlan } from '@/lib/plans';
 import {
   checkCanActivateAutomation,
@@ -718,7 +726,62 @@ async function handleListAccounts(req) {
     accountType: a.accountType,
     tokenExpiry: a.tokenExpiry,
     pfp: a.pfp,
+    pause: publicPauseStatus(accountPauseStatus(a)),
   })) });
+}
+
+async function handleResetSendLimit(req, accountId) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  const db = await getDb();
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+  const acct = await db.collection('instagram_accounts').findOne({
+    _id: accountId,
+    connectedUserId: u.userId,
+    workspaceId: workspace._id,
+  });
+  if (!acct) return json({ error: 'Instagram account not found' }, 404);
+
+  const pause = accountPauseStatus(acct);
+  if (!pause?.paused || pause.type !== AUTOMATION_PAUSE_TYPES.INTERNAL_SEND_LIMIT || !pause.canReset) {
+    return json({ error: 'Only an active internal send-limit pause can be reset manually.' }, 409);
+  }
+
+  // Keep the database pause active while deleting Redis so workers cannot recreate
+  // the counter between the two operations.
+  await getRedis().del(accountSendLimitKey(accountId));
+  const now = new Date();
+  const result = await db.collection('instagram_accounts').updateOne(
+    {
+      _id: accountId,
+      connectedUserId: u.userId,
+      workspaceId: workspace._id,
+      automationPausedUntil: acct.automationPausedUntil,
+      automationPauseReason: acct.automationPauseReason,
+    },
+    {
+      $unset: {
+        automationPausedUntil: '',
+        automationPauseReason: '',
+        automationPauseType: '',
+      },
+      $set: {
+        sendLimitResetAt: now,
+        sendLimitResetByUserId: u.userId,
+        updatedAt: now,
+      },
+    },
+  );
+  if (result.modifiedCount !== 1) {
+    return json({ error: 'The pause changed while it was being reset. Refresh and try again.' }, 409);
+  }
+  return json({
+    success: true,
+    accountId,
+    pause: publicPauseStatus(null),
+    resetAt: now,
+  });
 }
 
 async function handleDisconnect(req, accountId) {
@@ -955,7 +1018,11 @@ async function addRunCounts(db, userId, automations, workspaceId = null) {
     { $group: { _id: '$automationId', count: { $sum: 1 } } },
   ]).toArray();
   const countById = new Map(counts.map(row => [row._id, row.count]));
-  return automations.map(a => ({ ...a, runsCount: countById.get(a._id) || 0 }));
+  return automations.map(a => ({
+    ...a,
+    runsCount: countById.get(a._id) || 0,
+    pause: publicPauseStatus(automationPauseStatus(a)),
+  }));
 }
 
 async function handleCreateAutomation(req) {
@@ -1980,6 +2047,10 @@ if (path === '/auth/me' && method === 'GET') return handleMe(req);
   if (path.startsWith('/instagram/accounts/') && path.endsWith('/resubscribe') && method === 'POST') {
     const id = path.split('/')[3];
     return handleResubscribe(req, id);
+  }
+  if (path.startsWith('/instagram/accounts/') && path.endsWith('/reset-send-limit') && method === 'POST') {
+    const id = path.split('/')[3];
+    return handleResetSendLimit(req, id);
   }
   if (path.startsWith('/instagram/accounts/') && path.endsWith('/subscription') && method === 'GET') {
     const id = path.split('/')[3];
