@@ -8,6 +8,10 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
+import { execFile } from 'child_process';
+import { Readable, Transform } from 'stream';
+import { pipeline } from 'stream/promises';
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { MongoClient } from 'mongodb';
@@ -34,6 +38,13 @@ import {
   extractInstagramPostShares,
   findMatchingInstagramPostShare,
 } from './lib/instagram-post-share.js';
+import { decryptSecret } from './lib/token-crypto.js';
+import {
+  SHORTS_SYNC_QUEUE,
+  buildShortsMetadata,
+  ensureShortsSyncIndexes,
+  evaluateShortsEligibility,
+} from './lib/shorts-sync.js';
 
 // Lightweight .env loader (avoids extra dep)
 try {
@@ -47,6 +58,14 @@ try {
 } catch {}
 
 const QUEUE_NAME = 'webhook-events';
+const SHORTS_SYNC_SCAN_INTERVAL_MS = parsePositiveInt(
+  process.env.SHORTS_SYNC_SCAN_INTERVAL_MINUTES,
+  5,
+) * 60 * 1000;
+const SHORTS_SYNC_MAX_DOWNLOAD_BYTES = parsePositiveInt(
+  process.env.SHORTS_SYNC_MAX_DOWNLOAD_MB,
+  512,
+) * 1024 * 1024;
 const API_VERSION = process.env.META_API_VERSION || 'v22.0';
 const DEFAULT_COOLDOWN_MINUTES = 15;
 const DM_COOLDOWN_SECONDS = parsePositiveInt(
@@ -949,6 +968,7 @@ async function ensureAudienceIndexes(dbi) {
     audienceIndexesPromise = Promise.all([
       dbi.collection('audience_members').createIndex({ workspaceId: 1, instagramScopedUserId: 1 }, { unique: true }),
       dbi.collection('audience_members').createIndex({ userId: 1, workspaceId: 1, lastTriggeredAt: -1 }),
+      dbi.collection('audience_members').createIndex({ userId: 1, workspaceId: 1, lastTriggeredAt: -1, updatedAt: -1, instagramScopedUserId: -1 }),
     ]).catch((e) => {
       audienceIndexesPromise = null;
       logAutomation('audience', 'index setup failed', { error: e?.message });
@@ -1197,6 +1217,432 @@ async function processInstagramPostShare({ dbi, job, msg, igUserId, senderId, re
 }
 
 // ---- Job processor ----
+function logShortsSync(message, details = {}) {
+  console.log('[shorts-sync]', message, JSON.stringify(details));
+}
+
+async function refreshYouTubeAccessToken(dbi, channel) {
+  let refreshToken;
+  try {
+    refreshToken = decryptSecret(channel.encryptedRefreshToken);
+  } catch (e) {
+    e.permanent = true;
+    throw e;
+  }
+
+  const form = new URLSearchParams();
+  form.set('client_id', process.env.GOOGLE_CLIENT_ID || '');
+  form.set('client_secret', process.env.GOOGLE_CLIENT_SECRET || '');
+  form.set('grant_type', 'refresh_token');
+  form.set('refresh_token', refreshToken);
+  const res = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) {
+    await dbi.collection('youtube_channels').updateOne(
+      { _id: channel._id },
+      { $set: { tokenStatus: 'error', tokenError: data.error_description || data.error || 'token_refresh_failed', updatedAt: new Date() } },
+    );
+    const error = new Error(data.error_description || data.error || 'Unable to refresh YouTube access.');
+    error.permanent = ['invalid_grant', 'invalid_client', 'unauthorized_client'].includes(data.error);
+    throw error;
+  }
+  if (channel.tokenStatus !== 'ok') {
+    await dbi.collection('youtube_channels').updateOne(
+      { _id: channel._id },
+      { $set: { tokenStatus: 'ok', updatedAt: new Date() }, $unset: { tokenError: '' } },
+    );
+  }
+  return data.access_token;
+}
+
+async function fetchInstagramMediaForSync(acct) {
+  const fields = 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,media_product_type';
+  const url = `https://graph.instagram.com/${API_VERSION}/me/media?fields=${fields}&limit=25&access_token=${encodeURIComponent(acct.accessToken)}`;
+  const res = await fetch(url);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error?.message || 'Unable to scan Instagram media.');
+  return data.data || [];
+}
+
+async function scanAllShortsSyncWorkspaces(job, dbi, shortsQueue) {
+  await ensureShortsSyncIndexes(dbi);
+  const settings = await dbi.collection('shorts_sync_settings')
+    .find({ enabled: true })
+    .project({ userId: 1, workspaceId: 1 })
+    .toArray();
+  for (const setting of settings) {
+    await shortsQueue.add('scan-workspace', {
+      userId: setting.userId,
+      workspaceId: setting.workspaceId,
+      reason: job?.id || 'repeat',
+    }, {
+      jobId: `shorts-scan:${setting.workspaceId}:${Date.now()}`,
+      attempts: 2,
+    });
+  }
+  logShortsSync('scan-all queued workspace scans', { count: settings.length });
+}
+
+async function markScanStatus(dbi, userId, workspaceId, status, message = null) {
+  await dbi.collection('shorts_sync_settings').updateOne(
+    { userId, workspaceId },
+    { $set: { lastScanAt: new Date(), lastScanStatus: status, lastScanMessage: message, updatedAt: new Date() } },
+  );
+}
+
+async function queueShortsUpload({ dbi, shortsQueue, userId, workspaceId, acct, media, job }) {
+  const now = new Date();
+  const mediaId = String(media.id);
+  try {
+    await dbi.collection('shorts_sync_media').insertOne({
+      _id: uuidv4(),
+      userId,
+      workspaceId,
+      instagramAccountId: acct._id,
+      instagramMediaId: mediaId,
+      status: media.media_type === 'VIDEO' ? 'queued' : 'ignored_non_video',
+      media,
+      seenAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (e) {
+    if (e?.code === 11000) return false;
+    throw e;
+  }
+
+  if (media.media_type !== 'VIDEO') return false;
+
+  const run = {
+    _id: uuidv4(),
+    userId,
+    workspaceId,
+    instagramAccountId: acct._id,
+    instagramMediaId: mediaId,
+    instagramPermalink: media.permalink || null,
+    instagramTimestamp: media.timestamp || null,
+    caption: media.caption || '',
+    thumbnailUrl: media.thumbnail_url || null,
+    mediaUrl: media.media_url || null,
+    media,
+    type: 'upload',
+    status: 'queued',
+    message: 'Upload queued.',
+    sourceJobId: job?.id || null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await dbi.collection('shorts_sync_runs').insertOne(run);
+  await shortsQueue.add('upload-media', {
+    userId,
+    workspaceId,
+    instagramAccountId: acct._id,
+    instagramMediaId: mediaId,
+    media,
+    runId: run._id,
+  }, { jobId: `shorts-upload:${workspaceId}:${mediaId}` });
+  return true;
+}
+
+async function scanShortsSyncWorkspace(job, dbi, shortsQueue) {
+  await ensureShortsSyncIndexes(dbi);
+  const { userId, workspaceId } = job.data || {};
+  if (!userId || !workspaceId) return;
+
+  const [setting, workspace, acct, channel] = await Promise.all([
+    dbi.collection('shorts_sync_settings').findOne({ userId, workspaceId, enabled: true }),
+    dbi.collection('workspaces').findOne({ _id: workspaceId, ownerUserId: userId }),
+    dbi.collection('instagram_accounts').findOne({ connectedUserId: userId, workspaceId }),
+    dbi.collection('youtube_channels').findOne({ userId, workspaceId }),
+  ]);
+  if (!setting) return;
+  if (!workspace || (workspace.status || 'active') !== 'active') {
+    await markScanStatus(dbi, userId, workspaceId, 'skipped', 'Workspace is disabled.');
+    return;
+  }
+  if (!acct || !channel) {
+    await markScanStatus(dbi, userId, workspaceId, 'skipped', 'Instagram and YouTube must both be connected.');
+    return;
+  }
+
+  try {
+    const media = await fetchInstagramMediaForSync(acct);
+    let queued = 0;
+    for (const item of media) {
+      if (await queueShortsUpload({ dbi, shortsQueue, userId, workspaceId, acct, media: item, job })) queued += 1;
+    }
+    await markScanStatus(dbi, userId, workspaceId, 'ok', queued ? `${queued} new upload${queued === 1 ? '' : 's'} queued.` : 'No new Instagram videos found.');
+    logShortsSync('workspace scan complete', { workspaceId, queued, scanned: media.length });
+  } catch (e) {
+    await markScanStatus(dbi, userId, workspaceId, 'failed', e.message);
+    throw e;
+  }
+}
+
+async function resolveFfprobePath() {
+  if (process.env.FFPROBE_PATH) return process.env.FFPROBE_PATH;
+  try {
+    const mod = await import('ffprobe-static');
+    return mod.default?.path || mod.path || 'ffprobe';
+  } catch {
+    return 'ffprobe';
+  }
+}
+
+function execFileJson(command, args) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
+}
+
+async function probeVideo(filePath) {
+  const ffprobePath = await resolveFfprobePath();
+  const data = await execFileJson(ffprobePath, [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height,duration:format=duration',
+    '-of', 'json',
+    filePath,
+  ]);
+  const stream = data.streams?.[0] || {};
+  return {
+    width: Number(stream.width || 0),
+    height: Number(stream.height || 0),
+    durationSeconds: Number(stream.duration || data.format?.duration || 0),
+  };
+}
+
+async function downloadVideo(url, filePath) {
+  if (!url) throw new Error('Instagram video URL is missing.');
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`Unable to download Instagram video (${res.status}).`);
+  const length = Number(res.headers.get('content-length') || 0);
+  if (length > SHORTS_SYNC_MAX_DOWNLOAD_BYTES) {
+    const err = new Error('Video file is larger than the configured Shorts Sync limit.');
+    err.permanent = true;
+    err.skipCode = 'file_too_large';
+    throw err;
+  }
+
+  let downloaded = 0;
+  const limiter = new Transform({
+    transform(chunk, encoding, callback) {
+      downloaded += chunk.length;
+      if (downloaded > SHORTS_SYNC_MAX_DOWNLOAD_BYTES) {
+        const err = new Error('Video file exceeded the configured Shorts Sync limit while downloading.');
+        err.permanent = true;
+        err.skipCode = 'file_too_large';
+        callback(err);
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  await pipeline(Readable.fromWeb(res.body), limiter, fs.createWriteStream(filePath));
+}
+
+async function startYouTubeUpload({ accessToken, metadata, settings, fileSize }) {
+  const body = {
+    snippet: {
+      title: metadata.title,
+      description: metadata.description,
+      tags: metadata.tags,
+      categoryId: metadata.categoryId,
+    },
+    status: {
+      privacyStatus: settings.privacyStatus || 'private',
+      selfDeclaredMadeForKids: false,
+    },
+  };
+  const bodyText = JSON.stringify(body);
+  const url = `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status&notifySubscribers=${settings.notifySubscribers ? 'true' : 'false'}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'Content-Length': Buffer.byteLength(bodyText).toString(),
+      'X-Upload-Content-Length': String(fileSize),
+      'X-Upload-Content-Type': 'video/*',
+    },
+    body: bodyText,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error?.message || 'YouTube upload session could not be started.');
+  }
+  const location = res.headers.get('location');
+  if (!location) throw new Error('YouTube did not return an upload session URL.');
+  return location;
+}
+
+async function uploadVideoToYouTube({ accessToken, filePath, metadata, settings }) {
+  const stat = await fs.promises.stat(filePath);
+  const uploadUrl = await startYouTubeUpload({
+    accessToken,
+    metadata,
+    settings,
+    fileSize: stat.size,
+  });
+  const res = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Length': String(stat.size),
+      'Content-Type': 'video/*',
+    },
+    body: fs.createReadStream(filePath),
+    duplex: 'half',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error?.message || 'YouTube upload failed.');
+    err.details = data;
+    throw err;
+  }
+  return data;
+}
+
+async function updateShortsRun(dbi, runId, update) {
+  if (!runId) return;
+  await dbi.collection('shorts_sync_runs').updateOne(
+    { _id: runId },
+    { $set: { ...update, updatedAt: new Date() } },
+  );
+}
+
+async function processShortsSyncUpload(job, dbi) {
+  await ensureShortsSyncIndexes(dbi);
+  const { userId, workspaceId, instagramAccountId, instagramMediaId, media, retryOfRunId } = job.data || {};
+  let runId = job.data?.runId;
+  if (!runId && retryOfRunId) {
+    const now = new Date();
+    const retryRun = {
+      _id: uuidv4(),
+      userId,
+      workspaceId,
+      instagramAccountId,
+      instagramMediaId,
+      instagramPermalink: media?.permalink || null,
+      instagramTimestamp: media?.timestamp || null,
+      caption: media?.caption || '',
+      thumbnailUrl: media?.thumbnail_url || null,
+      mediaUrl: media?.media_url || null,
+      media,
+      type: 'retry',
+      status: 'queued',
+      message: 'Retry started.',
+      retryOfRunId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await dbi.collection('shorts_sync_runs').insertOne(retryRun);
+    runId = retryRun._id;
+  }
+  await updateShortsRun(dbi, runId, { status: 'processing', message: 'Downloading Instagram video.' });
+
+  const [setting, workspace, acct, channel] = await Promise.all([
+    dbi.collection('shorts_sync_settings').findOne({ userId, workspaceId, enabled: true }),
+    dbi.collection('workspaces').findOne({ _id: workspaceId, ownerUserId: userId }),
+    dbi.collection('instagram_accounts').findOne({ _id: instagramAccountId, connectedUserId: userId, workspaceId }),
+    dbi.collection('youtube_channels').findOne({ userId, workspaceId }),
+  ]);
+  if (!setting || !workspace || (workspace.status || 'active') !== 'active' || !acct || !channel) {
+    const err = new Error('Shorts Sync is no longer connected or enabled for this workspace.');
+    err.permanent = true;
+    throw err;
+  }
+
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'komentra-shorts-'));
+  const filePath = path.join(tempDir, `${instagramMediaId || 'media'}.mp4`);
+  try {
+    await downloadVideo(media?.media_url, filePath);
+    await updateShortsRun(dbi, runId, { message: 'Checking Shorts eligibility.' });
+    const probe = await probeVideo(filePath);
+    const eligibility = evaluateShortsEligibility(probe);
+    if (!eligibility.ok) {
+      await Promise.all([
+        updateShortsRun(dbi, runId, {
+          status: 'skipped',
+          message: eligibility.reason,
+          failureReason: eligibility.reason,
+          failureCode: eligibility.code,
+          probe,
+        }),
+        dbi.collection('shorts_sync_media').updateOne(
+          { workspaceId, instagramAccountId, instagramMediaId: String(instagramMediaId) },
+          { $set: { status: 'skipped', failureReason: eligibility.reason, probe, updatedAt: new Date() } },
+        ),
+      ]);
+      return;
+    }
+
+    const metadata = buildShortsMetadata(media);
+    await updateShortsRun(dbi, runId, { message: 'Uploading to YouTube.', probe, metadata });
+    const accessToken = await refreshYouTubeAccessToken(dbi, channel);
+    const uploaded = await uploadVideoToYouTube({ accessToken, filePath, metadata, settings: setting });
+    const youtubeVideoId = uploaded.id;
+    await Promise.all([
+      updateShortsRun(dbi, runId, {
+        status: 'uploaded',
+        message: 'Uploaded to YouTube as a private Short.',
+        youtubeVideoId,
+        youtubeResponse: uploaded,
+      }),
+      dbi.collection('shorts_sync_media').updateOne(
+        { workspaceId, instagramAccountId, instagramMediaId: String(instagramMediaId) },
+        { $set: { status: 'uploaded', youtubeVideoId, uploadedAt: new Date(), updatedAt: new Date() } },
+      ),
+    ]);
+    logShortsSync('upload complete', { workspaceId, instagramMediaId, youtubeVideoId });
+  } catch (e) {
+    const status = e.permanent ? 'skipped' : 'failed';
+    await Promise.all([
+      updateShortsRun(dbi, runId, {
+        status,
+        message: e.message,
+        failureReason: e.message,
+        failureCode: e.skipCode || null,
+      }),
+      dbi.collection('shorts_sync_media').updateOne(
+        { workspaceId, instagramAccountId, instagramMediaId: String(instagramMediaId) },
+        { $set: { status, failureReason: e.message, updatedAt: new Date() } },
+      ),
+    ]);
+    if (!e.permanent) throw e;
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function processShortsSyncJob(job) {
+  const dbi = await db();
+  if (job.name === 'scan-all') {
+    await scanAllShortsSyncWorkspaces(job, dbi, shortsSyncQueue);
+    return;
+  }
+  if (job.name === 'scan-workspace') {
+    await scanShortsSyncWorkspace(job, dbi, shortsSyncQueue);
+    return;
+  }
+  if (job.name === 'upload-media') {
+    await processShortsSyncUpload(job, dbi);
+    return;
+  }
+  logShortsSync('ignored unknown job', { name: job.name, id: job.id });
+}
+
 async function processJob(job) {
   const dbi = await db();
   if (job.name === 'automation-pause-email') {
@@ -2089,10 +2535,39 @@ const worker = new Worker(QUEUE_NAME, processJob, {
   concurrency: parseInt(process.env.WORKER_CONCURRENCY || '8', 10),
 });
 const notificationQueue = new Queue(QUEUE_NAME, { connection: redis });
+const shortsSyncQueue = new Queue(SHORTS_SYNC_QUEUE, { connection: redis });
+const shortsSyncWorker = new Worker(SHORTS_SYNC_QUEUE, processShortsSyncJob, {
+  connection: redis,
+  concurrency: parsePositiveInt(process.env.SHORTS_SYNC_WORKER_CONCURRENCY, 2),
+});
+
+async function scheduleShortsSyncScanner() {
+  try {
+    await shortsSyncQueue.add('scan-all', {}, {
+      jobId: 'shorts-sync-scan-all-repeat',
+      repeat: { every: SHORTS_SYNC_SCAN_INTERVAL_MS },
+    });
+    await shortsSyncQueue.add('scan-all', { reason: 'worker-start' }, {
+      jobId: `shorts-sync-startup-${Date.now()}`,
+      attempts: 1,
+    });
+    console.log('[shorts-sync] scanner scheduled', JSON.stringify({
+      intervalMs: SHORTS_SYNC_SCAN_INTERVAL_MS,
+      maxDownloadMb: SHORTS_SYNC_MAX_DOWNLOAD_BYTES / 1024 / 1024,
+    }));
+  } catch (e) {
+    console.error('[shorts-sync] scanner schedule failed', e?.message);
+  }
+}
 
 worker.on('completed', (job) => console.log(`[worker] job ${job.id} done`));
 worker.on('failed', (job, err) => console.error(`[worker] job ${job?.id} failed:`, err.message));
 worker.on('error', (e) => console.error('[worker] error', e?.message));
+shortsSyncWorker.on('completed', (job) => console.log(`[shorts-sync] job ${job.id} done`));
+shortsSyncWorker.on('failed', (job, err) => console.error(`[shorts-sync] job ${job?.id} failed:`, err.message));
+shortsSyncWorker.on('error', (e) => console.error('[shorts-sync] worker error', e?.message));
+
+scheduleShortsSyncScanner();
 
 console.log('[worker] started, concurrency =', worker.opts.concurrency, JSON.stringify({
   automationsPaused: envFlag('AUTOMATIONS_PAUSED'),
@@ -2100,4 +2575,5 @@ console.log('[worker] started, concurrency =', worker.opts.concurrency, JSON.str
   dmCooldownSeconds: DM_COOLDOWN_SECONDS,
   followRetryCooldownSeconds: FOLLOW_RETRY_COOLDOWN_SECONDS,
   accountSendLimitPerHour: ACCOUNT_SEND_LIMIT_PER_HOUR,
+  shortsSyncConcurrency: shortsSyncWorker.opts.concurrency,
 }));

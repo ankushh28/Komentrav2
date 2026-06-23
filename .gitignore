@@ -3,7 +3,7 @@
 # IDE and editors
 .idea/
 .vscode/
-
+.env.example
 # Dependencies
 node_modules/
 /node_modules

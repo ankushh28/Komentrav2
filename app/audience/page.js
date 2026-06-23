@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -11,6 +11,8 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ArrowLeft, Download, Search, Users, Activity, MessageCircle, Inbox } from 'lucide-react';
 import { authFetch, isSessionExpiredError } from '@/lib/client-auth';
+
+const AUDIENCE_PAGE_SIZE = 25;
 
 function scopedHeaders(token, workspaceId, extra = {}) {
   return {
@@ -36,6 +38,12 @@ export default function AudiencePage() {
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
   const [audience, setAudience] = useState([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [summary, setSummary] = useState({ audience: 0, triggers: 0, comments: 0, dms: 0 });
+  const [total, setTotal] = useState(0);
+  const [pagination, setPagination] = useState({ hasNext: false, nextCursor: null });
+  const [cursorHistory, setCursorHistory] = useState([null]);
+  const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -63,35 +71,54 @@ export default function AudiencePage() {
     }
   }, [token, router]);
 
-  const loadAudience = useCallback(async () => {
+  const loadAudience = useCallback(async (cursor, signal) => {
     if (!token || !selectedWorkspaceId) return;
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (search.trim()) params.set('search', search.trim());
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      if (cursor) params.set('cursor', cursor);
       const res = await authFetch(router, `/api/audience${params.toString() ? `?${params}` : ''}`, {
         headers: scopedHeaders(token, selectedWorkspaceId),
+        signal,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Unable to load audience');
       setAudience(data.audience || []);
+      setSummary(data.summary || { audience: 0, triggers: 0, comments: 0, dms: 0 });
+      setTotal(data.total || 0);
+      setPagination(data.pagination || { hasNext: false, nextCursor: null });
     } catch (e) {
-      if (!isSessionExpiredError(e)) toast.error(e.message || 'Unable to load audience');
+      if (e.name !== 'AbortError' && !isSessionExpiredError(e)) {
+        toast.error(e.message || 'Unable to load audience');
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  }, [token, selectedWorkspaceId, search, router]);
+  }, [token, selectedWorkspaceId, debouncedSearch, router]);
 
   useEffect(() => { if (token) loadWorkspaces(); }, [token, loadWorkspaces]);
-  useEffect(() => { if (selectedWorkspaceId) loadAudience(); }, [selectedWorkspaceId, loadAudience]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timeout);
+  }, [search]);
+
+  useEffect(() => {
+    setCursorHistory([null]);
+    setPageIndex(0);
+  }, [selectedWorkspaceId, debouncedSearch]);
+
+  useEffect(() => {
+    if (!selectedWorkspaceId) return undefined;
+    const controller = new AbortController();
+    loadAudience(cursorHistory[pageIndex] || null, controller.signal);
+    return () => controller.abort();
+  }, [selectedWorkspaceId, cursorHistory, pageIndex, loadAudience]);
 
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId);
-  const totals = useMemo(() => audience.reduce((acc, member) => {
-    acc.triggers += member.triggerCount || 0;
-    acc.comments += member.commentTriggerCount || 0;
-    acc.dms += member.dmTriggerCount || 0;
-    return acc;
-  }, { triggers: 0, comments: 0, dms: 0 }), [audience]);
+  const rangeStart = total > 0 ? (pageIndex * AUDIENCE_PAGE_SIZE) + 1 : 0;
+  const rangeEnd = total > 0 ? Math.min(rangeStart + audience.length - 1, total) : 0;
 
   const selectWorkspace = (id) => {
     setSelectedWorkspaceId(id);
@@ -126,6 +153,20 @@ export default function AudiencePage() {
         URL.revokeObjectURL(url);
       })
       .catch((e) => { if (!isSessionExpiredError(e)) toast.error(e.message); });
+  };
+
+  const nextPage = () => {
+    if (loading || !pagination.hasNext || !pagination.nextCursor) return;
+    setCursorHistory(history => [
+      ...history.slice(0, pageIndex + 1),
+      pagination.nextCursor,
+    ]);
+    setPageIndex(index => index + 1);
+  };
+
+  const previousPage = () => {
+    if (loading || pageIndex === 0) return;
+    setPageIndex(index => index - 1);
   };
 
   if (!token) return null;
@@ -172,16 +213,16 @@ export default function AudiencePage() {
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
-            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Audience</p><p className="text-3xl font-bold">{audience.length}</p></CardContent>
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Audience</p><p className="text-3xl font-bold">{summary.audience}</p></CardContent>
           </Card>
           <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
-            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Triggers</p><p className="text-3xl font-bold">{totals.triggers}</p></CardContent>
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Triggers</p><p className="text-3xl font-bold">{summary.triggers}</p></CardContent>
           </Card>
           <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
-            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Comments</p><p className="text-3xl font-bold">{totals.comments}</p></CardContent>
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">Comments</p><p className="text-3xl font-bold">{summary.comments}</p></CardContent>
           </Card>
           <Card className="border border-slate-200 bg-white text-slate-950 shadow-sm">
-            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">DMs</p><p className="text-3xl font-bold">{totals.dms}</p></CardContent>
+            <CardContent className="p-5"><p className="text-xs text-slate-500 mb-1">DMs</p><p className="text-3xl font-bold">{summary.dms}</p></CardContent>
           </Card>
         </div>
 
@@ -203,12 +244,15 @@ export default function AudiencePage() {
             ) : audience.length === 0 ? (
               <div className="py-16 text-center">
                 <Users className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-                <p className="font-medium">No audience yet</p>
-                <p className="text-sm text-muted-foreground">Matched comments and DMs will show up here.</p>
+                <p className="font-medium">{debouncedSearch ? 'No matching audience members' : 'No audience yet'}</p>
+                <p className="text-sm text-muted-foreground">
+                  {debouncedSearch ? 'Try a different search.' : 'Matched comments and DMs will show up here.'}
+                </p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
                   <thead className="text-xs text-muted-foreground border-b">
                     <tr>
                       <th className="text-left py-2">User</th>
@@ -236,8 +280,23 @@ export default function AudiencePage() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
-              </div>
+                  </table>
+                </div>
+                <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-muted-foreground">
+                    Showing {rangeStart}-{rangeEnd} of {total} {debouncedSearch ? 'matching members' : 'members'}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={previousPage} disabled={loading || pageIndex === 0}>
+                      Previous
+                    </Button>
+                    <span className="min-w-16 text-center text-sm text-muted-foreground">Page {pageIndex + 1}</span>
+                    <Button variant="outline" size="sm" onClick={nextPage} disabled={loading || !pagination.hasNext}>
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>

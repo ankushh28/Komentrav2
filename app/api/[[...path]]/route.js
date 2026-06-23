@@ -23,6 +23,23 @@ import {
   getUserEntitlements,
 } from '@/lib/entitlements';
 import { canonicalInstagramPostKey } from '@/lib/instagram-post-share';
+import { encryptSecret, hasTokenEncryptionKey } from '@/lib/token-crypto';
+import {
+  canUseShortsSync,
+  ensureShortsSyncIndexes,
+  getShortsSyncQueue,
+  normalizeShortsSyncSettings,
+  publicShortsSyncRun,
+  publicYouTubeChannel,
+} from '@/lib/shorts-sync';
+import {
+  AUDIENCE_PAGE_SIZE,
+  AUDIENCE_SORT,
+  audienceCursorQuery,
+  audiencePageCapacity,
+  decodeAudienceCursor,
+  encodeAudienceCursor,
+} from '@/lib/audience-pagination';
 
 const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
@@ -30,6 +47,10 @@ const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'test';
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL;
 const API_VERSION = process.env.META_API_VERSION || 'v23.0';
 const REDIRECT_URI = `${BASE_URL}/api/instagram/callback`;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const YOUTUBE_REDIRECT_URI = `${BASE_URL}/api/youtube/callback`;
+const YOUTUBE_UPLOAD_SCOPE = 'https://www.googleapis.com/auth/youtube.upload';
 const RAZORPAY_API_BASE = 'https://api.razorpay.com/v1';
 
 function json(data, status = 200) {
@@ -103,6 +124,7 @@ async function ensureWorkspaceIndexes(db) {
       db.collection('automation_runs').createIndex({ userId: 1, workspaceId: 1, ranAt: -1 }),
       db.collection('audience_members').createIndex({ workspaceId: 1, instagramScopedUserId: 1 }, { unique: true }),
       db.collection('audience_members').createIndex({ userId: 1, workspaceId: 1, lastTriggeredAt: -1 }),
+      db.collection('audience_members').createIndex({ userId: 1, workspaceId: 1, lastTriggeredAt: -1, updatedAt: -1, instagramScopedUserId: -1 }),
     ]).catch((e) => {
       workspaceIndexesPromise = null;
       console.error('[workspaces] index setup failed', e?.message);
@@ -299,6 +321,10 @@ async function handleDeleteWorkspace(req, id) {
   if (!workspace) return json({ error: 'Workspace not found' }, 404);
   await Promise.all([
     db.collection('instagram_accounts').deleteMany({ connectedUserId: u.userId, workspaceId: id }),
+    db.collection('youtube_channels').deleteMany({ userId: u.userId, workspaceId: id }),
+    db.collection('shorts_sync_settings').deleteMany({ userId: u.userId, workspaceId: id }),
+    db.collection('shorts_sync_media').deleteMany({ userId: u.userId, workspaceId: id }),
+    db.collection('shorts_sync_runs').deleteMany({ userId: u.userId, workspaceId: id }),
     db.collection('automations').deleteMany({ userId: u.userId, workspaceId: id }),
     db.collection('automation_runs').deleteMany({ userId: u.userId, workspaceId: id }),
     db.collection('workspaces').deleteOne({ _id: id, ownerUserId: u.userId }),
@@ -335,10 +361,15 @@ async function handleListAudience(req) {
   const { db, user, workspace, plan } = ctx;
   const url = new URL(req.url);
   const search = url.searchParams.get('search')?.trim();
-  const query = { userId: user.userId, workspaceId: workspace._id };
+  const cursorValue = url.searchParams.get('cursor');
+  const cursor = cursorValue ? decodeAudienceCursor(cursorValue) : null;
+  if (cursorValue && !cursor) return json({ error: 'Invalid audience cursor' }, 400);
+
+  const baseQuery = { userId: user.userId, workspaceId: workspace._id };
+  const searchQuery = { ...baseQuery };
   if (search) {
     const pattern = new RegExp(escapeRegex(search), 'i');
-    query.$or = [
+    searchQuery.$or = [
       { username: pattern },
       { displayName: pattern },
       { instagramScopedUserId: pattern },
@@ -346,14 +377,57 @@ async function handleListAudience(req) {
       { lastMessageText: pattern },
     ];
   }
-  const members = await db.collection('audience_members')
-    .find(query)
-    .sort({ lastTriggeredAt: -1, updatedAt: -1 })
-    .limit(plan.audienceVisibleLimit)
-    .toArray();
+
+  const offset = cursor?.offset || 0;
+  const pageCapacity = audiencePageCapacity(plan.audienceVisibleLimit, offset);
+  if (offset >= plan.audienceVisibleLimit) {
+    return json({ error: 'Audience cursor exceeds the plan limit' }, 400);
+  }
+
+  const cursorQuery = audienceCursorQuery(cursor);
+  const listQuery = cursorQuery ? { $and: [searchQuery, cursorQuery] } : searchQuery;
+  const collection = db.collection('audience_members');
+  const [rawMembers, matchingCount, summaryRows] = await Promise.all([
+    collection.find(listQuery)
+      .sort(AUDIENCE_SORT)
+      .limit(pageCapacity + 1)
+      .toArray(),
+    collection.countDocuments(searchQuery, { limit: plan.audienceVisibleLimit }),
+    collection.aggregate([
+      { $match: baseQuery },
+      { $sort: AUDIENCE_SORT },
+      { $limit: plan.audienceVisibleLimit },
+      {
+        $group: {
+          _id: null,
+          audience: { $sum: 1 },
+          triggers: { $sum: { $ifNull: ['$triggerCount', 0] } },
+          comments: { $sum: { $ifNull: ['$commentTriggerCount', 0] } },
+          dms: { $sum: { $ifNull: ['$dmTriggerCount', 0] } },
+        },
+      },
+    ]).toArray(),
+  ]);
+  const hasNext = rawMembers.length > pageCapacity
+    && offset + pageCapacity < plan.audienceVisibleLimit;
+  const members = rawMembers.slice(0, pageCapacity);
+  const nextOffset = offset + members.length;
+  const nextCursor = hasNext && members.length
+    ? encodeAudienceCursor(members[members.length - 1], nextOffset)
+    : null;
+  const summary = summaryRows[0] || { audience: 0, triggers: 0, comments: 0, dms: 0 };
 
   return json({
     limit: plan.audienceVisibleLimit,
+    pageSize: AUDIENCE_PAGE_SIZE,
+    total: Math.min(matchingCount, plan.audienceVisibleLimit),
+    summary: {
+      audience: summary.audience || 0,
+      triggers: summary.triggers || 0,
+      comments: summary.comments || 0,
+      dms: summary.dms || 0,
+    },
+    pagination: { hasNext, nextCursor },
     audience: members.map(member => ({
       id: member._id,
       userId: member.userId,
@@ -883,6 +957,360 @@ async function handleListMedia(req) {
     console.error('media fetch error', e);
     return json({ error: e.message }, 500);
   }
+}
+
+async function fetchInstagramMediaList(acct, limit = 25) {
+  const fields = 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,media_product_type';
+  const mediaUrl = `https://graph.instagram.com/${API_VERSION}/me/media?fields=${fields}&limit=${limit}&access_token=${encodeURIComponent(acct.accessToken)}`;
+  const r = await fetch(mediaUrl);
+  const d = await r.json();
+  if (!r.ok) {
+    const err = new Error(d.error?.message || 'failed to fetch Instagram media');
+    err.details = d;
+    throw err;
+  }
+  return d.data || [];
+}
+
+function buildYouTubeAuthUrl(state) {
+  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  url.searchParams.set('client_id', GOOGLE_CLIENT_ID);
+  url.searchParams.set('redirect_uri', YOUTUBE_REDIRECT_URI);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope', YOUTUBE_UPLOAD_SCOPE);
+  url.searchParams.set('access_type', 'offline');
+  url.searchParams.set('include_granted_scopes', 'true');
+  url.searchParams.set('prompt', 'consent');
+  url.searchParams.set('state', state);
+  return url.toString();
+}
+
+async function exchangeGoogleCode(code) {
+  const form = new URLSearchParams();
+  form.set('client_id', GOOGLE_CLIENT_ID);
+  form.set('client_secret', GOOGLE_CLIENT_SECRET);
+  form.set('code', code);
+  form.set('grant_type', 'authorization_code');
+  form.set('redirect_uri', YOUTUBE_REDIRECT_URI);
+  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', body: form });
+  const data = await r.json();
+  if (!r.ok || !data.access_token) {
+    const err = new Error(data.error_description || data.error || 'Google OAuth token exchange failed');
+    err.details = data;
+    throw err;
+  }
+  return data;
+}
+
+async function fetchYouTubeChannelProfile(accessToken) {
+  const url = 'https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true';
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    console.warn('[youtube] channel profile fetch failed', data?.error?.message || r.status);
+    return null;
+  }
+  const channel = data.items?.[0];
+  return channel ? {
+    channelId: channel.id,
+    title: channel.snippet?.title || 'Connected YouTube channel',
+    thumbnailUrl: channel.snippet?.thumbnails?.default?.url || channel.snippet?.thumbnails?.medium?.url || null,
+  } : null;
+}
+
+async function handleYouTubeConnect(req) {
+  const u = getUserFromRequest(req);
+  if (!u) return json({ error: 'Unauthorized' }, 401);
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !BASE_URL) {
+    return json({ error: 'YouTube connection is not configured yet.' }, 500);
+  }
+  if (!hasTokenEncryptionKey()) {
+    return json({ error: 'TOKEN_ENCRYPTION_KEY is required before connecting YouTube.' }, 500);
+  }
+  const db = await getDb();
+  await ensureShortsSyncIndexes(db);
+  const { workspace, error } = await getWorkspaceForRequest(req, db, u.userId, { requireActive: true });
+  if (error) return error;
+  const state = crypto.randomUUID();
+  await db.collection('youtube_oauth_states').insertOne({
+    state,
+    userId: u.userId,
+    workspaceId: workspace._id,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    createdAt: new Date(),
+  });
+  return json({ url: buildYouTubeAuthUrl(state) });
+}
+
+async function handleYouTubeCallback(req) {
+  const url = new URL(req.url);
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  const errParam = url.searchParams.get('error');
+  if (errParam) {
+    return NextResponse.redirect(`${BASE_URL}/dashboard?yt=error&msg=${encodeURIComponent(errParam)}`);
+  }
+  if (!code || !state) {
+    return NextResponse.redirect(`${BASE_URL}/dashboard?yt=error&msg=missing_code`);
+  }
+
+  const db = await getDb();
+  await ensureShortsSyncIndexes(db);
+  const stateRecord = await db.collection('youtube_oauth_states').findOneAndDelete({
+    state,
+    expiresAt: { $gt: new Date() },
+  });
+  if (!stateRecord) {
+    return NextResponse.redirect(`${BASE_URL}/dashboard?yt=error&msg=invalid_state`);
+  }
+
+  const { userId, workspaceId } = stateRecord;
+  try {
+    const workspace = await db.collection('workspaces').findOne({ _id: workspaceId, ownerUserId: userId });
+    if (!workspace || (workspace.status || 'active') !== 'active') {
+      return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&yt=error&msg=workspace_unavailable`);
+    }
+    const tokens = await exchangeGoogleCode(code);
+    if (!tokens.refresh_token) {
+      return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&yt=error&msg=${encodeURIComponent('Google did not return an offline refresh token. Disconnect and try again.')}`);
+    }
+    const profile = await fetchYouTubeChannelProfile(tokens.access_token);
+    const now = new Date();
+    await db.collection('youtube_channels').findOneAndUpdate(
+      { userId, workspaceId },
+      {
+        $set: {
+          userId,
+          workspaceId,
+          channelId: profile?.channelId || null,
+          title: profile?.title || 'Connected YouTube channel',
+          thumbnailUrl: profile?.thumbnailUrl || null,
+          encryptedRefreshToken: encryptSecret(tokens.refresh_token),
+          tokenStatus: 'ok',
+          scopes: String(tokens.scope || YOUTUBE_UPLOAD_SCOPE).split(/\s+/).filter(Boolean),
+          updatedAt: now,
+        },
+        $setOnInsert: { _id: uuidv4(), createdAt: now },
+      },
+      { upsert: true },
+    );
+    return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&yt=success`);
+  } catch (e) {
+    console.error('[youtube] OAuth callback failed', e?.message);
+    return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&yt=error&msg=${encodeURIComponent(e.message || 'youtube_connection_failed')}`);
+  }
+}
+
+async function getShortsSyncContext(req, { requireActive = false } = {}) {
+  const u = getUserFromRequest(req);
+  if (!u) return { error: json({ error: 'Unauthorized' }, 401) };
+  const db = await getDb();
+  await ensureShortsSyncIndexes(db);
+  const workspaceResult = await getWorkspaceForRequest(req, db, u.userId, { requireActive });
+  if (workspaceResult.error) return { error: workspaceResult.error };
+  const { planId, plan } = await getUserEntitlements(db, u.userId);
+  return { db, user: u, workspace: workspaceResult.workspace, planId, plan };
+}
+
+async function getShortsSyncState(ctx, includeRuns = true) {
+  const { db, user, workspace, planId, plan } = ctx;
+  const [channel, account, settingsDoc, runs] = await Promise.all([
+    db.collection('youtube_channels').findOne({ userId: user.userId, workspaceId: workspace._id }),
+    db.collection('instagram_accounts').findOne({ connectedUserId: user.userId, workspaceId: workspace._id }),
+    db.collection('shorts_sync_settings').findOne({ userId: user.userId, workspaceId: workspace._id }),
+    includeRuns
+      ? db.collection('shorts_sync_runs').find({ userId: user.userId, workspaceId: workspace._id }).sort({ createdAt: -1 }).limit(8).toArray()
+      : Promise.resolve([]),
+  ]);
+  return {
+    entitlement: {
+      canUse: canUseShortsSync(planId),
+      planId,
+      planName: plan.name,
+      upgradePlanId: planId === 'free' ? 'creator' : null,
+    },
+    instagramAccount: account ? {
+      id: account._id,
+      username: account.username,
+      pfp: account.pfp || null,
+    } : null,
+    youtubeChannel: publicYouTubeChannel(channel),
+    settings: normalizeShortsSyncSettings(settingsDoc),
+    runs: runs.map(publicShortsSyncRun),
+  };
+}
+
+async function baselineShortsSyncMedia(db, user, workspace, acct) {
+  const media = await fetchInstagramMediaList(acct, 25);
+  const now = new Date();
+  const docs = media.map(item => ({
+    updateOne: {
+      filter: {
+        workspaceId: workspace._id,
+        instagramAccountId: acct._id,
+        instagramMediaId: String(item.id),
+      },
+      update: {
+        $setOnInsert: {
+          _id: uuidv4(),
+          userId: user.userId,
+          workspaceId: workspace._id,
+          instagramAccountId: acct._id,
+          instagramMediaId: String(item.id),
+          status: 'baseline_seen',
+          media: item,
+          seenAt: now,
+          createdAt: now,
+        },
+      },
+      upsert: true,
+    },
+  }));
+  if (docs.length > 0) {
+    await db.collection('shorts_sync_media').bulkWrite(docs, { ordered: false });
+  }
+  return media.length;
+}
+
+async function handleGetYouTubeChannel(req) {
+  const ctx = await getShortsSyncContext(req);
+  if (ctx.error) return ctx.error;
+  const channel = await ctx.db.collection('youtube_channels').findOne({
+    userId: ctx.user.userId,
+    workspaceId: ctx.workspace._id,
+  });
+  return json({ channel: publicYouTubeChannel(channel) });
+}
+
+async function handleDeleteYouTubeChannel(req) {
+  const ctx = await getShortsSyncContext(req, { requireActive: true });
+  if (ctx.error) return ctx.error;
+  await Promise.all([
+    ctx.db.collection('youtube_channels').deleteOne({ userId: ctx.user.userId, workspaceId: ctx.workspace._id }),
+    ctx.db.collection('shorts_sync_settings').updateOne(
+      { userId: ctx.user.userId, workspaceId: ctx.workspace._id },
+      { $set: { enabled: false, disabledAt: new Date(), updatedAt: new Date() } },
+    ),
+  ]);
+  return json({ success: true });
+}
+
+async function handleGetShortsSync(req) {
+  const ctx = await getShortsSyncContext(req);
+  if (ctx.error) return ctx.error;
+  return json(await getShortsSyncState(ctx));
+}
+
+async function handleUpdateShortsSync(req) {
+  const ctx = await getShortsSyncContext(req, { requireActive: true });
+  if (ctx.error) return ctx.error;
+  const { db, user, workspace, planId, plan } = ctx;
+  const body = await req.json();
+  const now = new Date();
+  const enableRequested = !!body.enabled;
+
+  const [channel, acct, existingSettings] = await Promise.all([
+    db.collection('youtube_channels').findOne({ userId: user.userId, workspaceId: workspace._id }),
+    db.collection('instagram_accounts').findOne({ connectedUserId: user.userId, workspaceId: workspace._id }),
+    db.collection('shorts_sync_settings').findOne({ userId: user.userId, workspaceId: workspace._id }),
+  ]);
+
+  if (enableRequested) {
+    if (!canUseShortsSync(planId)) {
+      return billingBlocked({
+        error: 'Shorts Sync is available on Creator, Growth, and Agency plans.',
+        code: 'shorts_sync_plan_required',
+        billing: {
+          plan: { id: plan.id, name: plan.name },
+          upgradePlanId: 'creator',
+        },
+      });
+    }
+    if (!acct) return json({ error: 'Connect Instagram before enabling Shorts Sync.' }, 400);
+    if (!channel) return json({ error: 'Connect YouTube before enabling Shorts Sync.' }, 400);
+  }
+
+  let baselineCount = 0;
+  const firstEnable = enableRequested && !existingSettings?.baselineAt;
+  if (firstEnable) {
+    baselineCount = await baselineShortsSyncMedia(db, user, workspace, acct);
+  }
+
+  await db.collection('shorts_sync_settings').findOneAndUpdate(
+    { userId: user.userId, workspaceId: workspace._id },
+    {
+      $set: {
+        userId: user.userId,
+        workspaceId: workspace._id,
+        enabled: enableRequested,
+        privacyStatus: ['private', 'unlisted', 'public'].includes(body.privacyStatus) ? body.privacyStatus : 'private',
+        notifySubscribers: !!body.notifySubscribers,
+        metadataPolicy: 'smart_caption',
+        ...(firstEnable ? { baselineAt: now, baselineMediaCount: baselineCount } : {}),
+        updatedAt: now,
+      },
+      $setOnInsert: { _id: uuidv4(), createdAt: now },
+    },
+    { upsert: true, returnDocument: 'after' },
+  );
+
+  if (enableRequested) {
+    await getShortsSyncQueue().add('scan-workspace', {
+      userId: user.userId,
+      workspaceId: workspace._id,
+      reason: firstEnable ? 'initial-enable' : 'settings-update',
+    }, { jobId: `shorts-scan:${workspace._id}:${Date.now()}` });
+  }
+
+  return json({ ...(await getShortsSyncState(ctx)), baselineCount });
+}
+
+async function handleShortsSyncRuns(req) {
+  const ctx = await getShortsSyncContext(req);
+  if (ctx.error) return ctx.error;
+  const url = new URL(req.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '25', 10) || 25, 50);
+  const runs = await ctx.db.collection('shorts_sync_runs')
+    .find({ userId: ctx.user.userId, workspaceId: ctx.workspace._id })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .toArray();
+  return json({ runs: runs.map(publicShortsSyncRun) });
+}
+
+async function handleRetryShortsSyncRun(req, runId) {
+  const ctx = await getShortsSyncContext(req, { requireActive: true });
+  if (ctx.error) return ctx.error;
+  const run = await ctx.db.collection('shorts_sync_runs').findOne({
+    _id: runId,
+    userId: ctx.user.userId,
+    workspaceId: ctx.workspace._id,
+  });
+  if (!run) return json({ error: 'Shorts Sync run not found' }, 404);
+  if (!['failed', 'skipped'].includes(run.status)) {
+    return json({ error: 'Only failed or skipped runs can be retried.' }, 409);
+  }
+  await getShortsSyncQueue().add('upload-media', {
+    userId: ctx.user.userId,
+    workspaceId: ctx.workspace._id,
+    instagramAccountId: run.instagramAccountId,
+    instagramMediaId: run.instagramMediaId,
+    retryOfRunId: run._id,
+    media: run.media || {
+      id: run.instagramMediaId,
+      caption: run.caption || '',
+      media_url: run.mediaUrl || null,
+      thumbnail_url: run.thumbnailUrl || null,
+      permalink: run.instagramPermalink || null,
+      media_type: 'VIDEO',
+      timestamp: run.instagramTimestamp || null,
+    },
+  }, { jobId: `shorts-retry:${run._id}:${Date.now()}` });
+  await ctx.db.collection('shorts_sync_runs').updateOne(
+    { _id: run._id },
+    { $set: { status: 'queued_retry', updatedAt: new Date(), message: 'Retry queued.' } },
+  );
+  return json({ success: true });
 }
 
 function mediaPreviewUrl(media) {
@@ -2055,6 +2483,21 @@ if (path === '/auth/me' && method === 'GET') return handleMe(req);
   if (path.startsWith('/instagram/accounts/') && path.endsWith('/subscription') && method === 'GET') {
     const id = path.split('/')[3];
     return handleCheckSubscription(req, id);
+  }
+
+  // YouTube
+  if (path === '/youtube/connect' && method === 'GET') return handleYouTubeConnect(req);
+  if (path === '/youtube/callback' && method === 'GET') return handleYouTubeCallback(req);
+  if (path === '/youtube/channel' && method === 'GET') return handleGetYouTubeChannel(req);
+  if (path === '/youtube/channel' && method === 'DELETE') return handleDeleteYouTubeChannel(req);
+
+  // Shorts Sync
+  if (path === '/shorts-sync' && method === 'GET') return handleGetShortsSync(req);
+  if (path === '/shorts-sync' && method === 'PUT') return handleUpdateShortsSync(req);
+  if (path === '/shorts-sync/runs' && method === 'GET') return handleShortsSyncRuns(req);
+  if (path.startsWith('/shorts-sync/runs/') && path.endsWith('/retry') && method === 'POST') {
+    const id = path.split('/')[3];
+    return handleRetryShortsSyncRun(req, id);
   }
 
   // Automations

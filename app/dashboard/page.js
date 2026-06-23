@@ -26,7 +26,7 @@ import {
   CheckCircle2, ExternalLink, UserPlus, Link as LinkIcon,
   X, Hash, Shuffle, Wand2, ChevronRight, BarChart3, MessageCircle, Inbox,
   Pencil, Settings, Users, Menu, LifeBuoy, CreditCard, ChevronDown, Search,
-  RefreshCw, ImageOff, Copy, AlertTriangle,
+  RefreshCw, ImageOff, Copy, AlertTriangle, Youtube, Film,
 } from 'lucide-react';
 
 function SectionHeader({ icon: Icon, step, title, subtitle }) {
@@ -1070,6 +1070,159 @@ function AutomationCard({ a, accounts, onToggle, onDelete, onEdit, onClone, disa
   );
 }
 
+function statusBadgeClass(status) {
+  if (status === 'uploaded') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (status === 'failed') return 'border-rose-200 bg-rose-50 text-rose-700';
+  if (status === 'skipped') return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (status === 'processing' || status === 'queued' || status === 'queued_retry') return 'border-sky-200 bg-sky-50 text-sky-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function statusLabel(status) {
+  if (status === 'queued_retry') return 'Retry queued';
+  return String(status || 'pending').replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
+}
+
+function ShortsSyncPanel({
+  state,
+  loading,
+  workspaceActive,
+  onConnectYouTube,
+  onDisconnectYouTube,
+  onToggle,
+  onRetry,
+  connectingYouTube,
+  disconnectingYouTube,
+  saving,
+  retryingRunId,
+}) {
+  const settings = state?.settings || {};
+  const channel = state?.youtubeChannel || null;
+  const instagram = state?.instagramAccount || null;
+  const runs = state?.runs || [];
+  const canUse = !!state?.entitlement?.canUse;
+  const enabled = !!settings.enabled;
+
+  return (
+    <section className="mb-10">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="flex items-center gap-2 text-xl font-bold"><Youtube className="h-5 w-5 text-red-600" /> Shorts Sync</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline" className={enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600'}>
+            {enabled ? 'Sync on' : 'Sync off'}
+          </Badge>
+          <Badge variant="outline">Private uploads</Badge>
+        </div>
+      </div>
+
+      <Card className="border border-slate-200 bg-white shadow-sm">
+        <CardContent className="p-5">
+          {loading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : (
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+                      <Instagram className="h-4 w-4" /> Instagram
+                    </div>
+                    <p className="truncate font-semibold text-slate-950">{instagram?.username ? `@${instagram.username}` : 'Not connected'}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+                      <Youtube className="h-4 w-4" /> YouTube
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="min-w-0 truncate font-semibold text-slate-950">{channel?.title || 'Not connected'}</p>
+                      {channel ? (
+                        <Button variant="ghost" size="icon" title="Disconnect YouTube" disabled={!workspaceActive || disconnectingYouTube} onClick={onDisconnectYouTube}>
+                          <Trash2 className="h-4 w-4 text-rose-600" />
+                        </Button>
+                      ) : (
+                        <Button size="sm" disabled={!workspaceActive || connectingYouTube} onClick={onConnectYouTube}>
+                          {connectingYouTube && <RefreshCw className="mr-2 h-4 w-4 animate-spin" />}
+                          Connect
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-4 rounded-lg border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="font-semibold text-slate-950">Auto-publish new Instagram videos</p>
+                    <p className="mt-1 text-sm text-muted-foreground">New square or vertical videos up to 3 minutes are uploaded to YouTube as private Shorts.</p>
+                    {!canUse && <p className="mt-2 text-sm font-medium text-amber-700">Available on Creator, Growth, and Agency plans.</p>}
+                    {settings.lastScanAt && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Last scan: {pauseTimeLabel(settings.lastScanAt)}{settings.lastScanMessage ? ` - ${settings.lastScanMessage}` : ''}
+                      </p>
+                    )}
+                  </div>
+                  <Switch
+                    checked={enabled}
+                    disabled={!workspaceActive || saving || !canUse || !instagram || !channel}
+                    onCheckedChange={(next) => onToggle(next)}
+                    aria-label="Toggle Shorts Sync"
+                  />
+                </div>
+
+                <div className="rounded-lg border border-sky-100 bg-sky-50 p-3 text-sm text-sky-900">
+                  YouTube may keep API uploads private until the Google API project passes compliance review.
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200">
+                <div className="flex items-center justify-between border-b px-4 py-3">
+                  <p className="font-semibold text-slate-950">Recent activity</p>
+                  <Film className="h-4 w-4 text-slate-500" />
+                </div>
+                {runs.length === 0 ? (
+                  <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+                    New sync activity will appear here.
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {runs.map((run) => (
+                      <div key={run.id} className="p-4">
+                        <div className="mb-2 flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-950">{run.caption || run.instagramMediaId || 'Instagram video'}</p>
+                            <p className="text-xs text-muted-foreground">{run.createdAt ? pauseTimeLabel(run.createdAt) : ''}</p>
+                          </div>
+                          <Badge variant="outline" className={statusBadgeClass(run.status)}>{statusLabel(run.status)}</Badge>
+                        </div>
+                        {(run.message || run.failureReason) && <p className="text-xs text-muted-foreground">{run.failureReason || run.message}</p>}
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          {run.youtubeUrl && (
+                            <Button asChild variant="outline" size="sm">
+                              <a href={run.youtubeUrl} target="_blank" rel="noreferrer"><ExternalLink className="mr-2 h-3.5 w-3.5" /> YouTube</a>
+                            </Button>
+                          )}
+                          {['failed', 'skipped'].includes(run.status) && (
+                            <Button variant="outline" size="sm" disabled={retryingRunId === run.id} onClick={() => onRetry(run.id)}>
+                              {retryingRunId === run.id && <RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" />}
+                              Retry
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
 function AccountSheet({ account, workspaceName, workspaceActive, connecting, resubscribing, onConnect, onDisconnect, onResubscribe }) {
   const username = account?.username ? `@${account.username}` : 'No account';
 
@@ -1223,6 +1376,12 @@ export default function DashboardPage() {
   const [pauseResetAccount, setPauseResetAccount] = useState(null);
   const [resettingPause, setResettingPause] = useState(false);
   const [highlightedAutomationId, setHighlightedAutomationId] = useState('');
+  const [shortsSync, setShortsSync] = useState(null);
+  const [loadingShortsSync, setLoadingShortsSync] = useState(false);
+  const [connectingYouTube, setConnectingYouTube] = useState(false);
+  const [disconnectingYouTube, setDisconnectingYouTube] = useState(false);
+  const [savingShortsSync, setSavingShortsSync] = useState(false);
+  const [retryingShortsRunId, setRetryingShortsRunId] = useState('');
 
   useEffect(() => {
     const t = localStorage.getItem('token');
@@ -1270,6 +1429,21 @@ export default function DashboardPage() {
     } catch (e) { if (!isSessionExpiredError(e)) toast.error('Failed to load data'); }
   }, [token, selectedWorkspaceId, router]);
 
+  const loadShortsSync = useCallback(async () => {
+    if (!token || !selectedWorkspaceId) return;
+    setLoadingShortsSync(true);
+    try {
+      const res = await authFetch(router, '/api/shorts-sync', { headers: scopedHeaders(token, selectedWorkspaceId) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load Shorts Sync');
+      setShortsSync(data);
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to load Shorts Sync');
+    } finally {
+      setLoadingShortsSync(false);
+    }
+  }, [token, selectedWorkspaceId, router]);
+
   const loadBillingStatus = useCallback(async () => {
     if (!token) return;
     try {
@@ -1290,6 +1464,7 @@ export default function DashboardPage() {
 
   useEffect(() => { if (token) loadWorkspaces(); }, [loadWorkspaces, token]);
   useEffect(() => { if (token && selectedWorkspaceId) refresh(); }, [refresh, token, selectedWorkspaceId]);
+  useEffect(() => { if (token && selectedWorkspaceId) loadShortsSync(); }, [loadShortsSync, token, selectedWorkspaceId]);
   useEffect(() => { if (token) loadBillingStatus(); }, [loadBillingStatus, token]);
 
   useEffect(() => {
@@ -1301,9 +1476,11 @@ export default function DashboardPage() {
       setSelectedWorkspaceId(workspaceId);
     }
     if (automationId) setHighlightedAutomationId(automationId);
-    if (params.get('ig') === 'success') { toast.success('Instagram account connected!'); window.history.replaceState({}, '', '/dashboard'); loadWorkspaces(workspaceId || ''); refresh(); }
+    if (params.get('ig') === 'success') { toast.success('Instagram account connected!'); window.history.replaceState({}, '', '/dashboard'); loadWorkspaces(workspaceId || ''); refresh(); loadShortsSync(); }
     else if (params.get('ig') === 'error') { toast.error('Connection failed: ' + (params.get('msg') || 'unknown')); window.history.replaceState({}, '', '/dashboard'); }
-  }, [loadWorkspaces, refresh]);
+    else if (params.get('yt') === 'success') { toast.success('YouTube channel connected!'); window.history.replaceState({}, '', '/dashboard'); loadShortsSync(); }
+    else if (params.get('yt') === 'error') { toast.error('YouTube connection failed: ' + (params.get('msg') || 'unknown')); window.history.replaceState({}, '', '/dashboard'); }
+  }, [loadWorkspaces, refresh, loadShortsSync]);
 
   useEffect(() => {
     if (!highlightedAutomationId || !automations.some(a => a._id === highlightedAutomationId)) return;
@@ -1386,6 +1563,80 @@ export default function DashboardPage() {
       if (!isSessionExpiredError(e)) toast.error(e.message);
     } finally {
       setResubscribingAccountId('');
+    }
+  };
+
+  const connectYouTube = async () => {
+    if (!selectedWorkspaceId) { toast.error('Choose a workspace first'); return; }
+    setConnectingYouTube(true);
+    try {
+      const res = await authFetch(router, '/api/youtube/connect', { headers: scopedHeaders(token, selectedWorkspaceId) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unable to connect YouTube');
+      window.location.href = data.url;
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Unable to connect YouTube');
+      setConnectingYouTube(false);
+    }
+  };
+
+  const disconnectYouTube = async () => {
+    if (!confirm('Disconnect this YouTube channel and turn off Shorts Sync?')) return;
+    setDisconnectingYouTube(true);
+    try {
+      const res = await authFetch(router, '/api/youtube/channel', {
+        method: 'DELETE',
+        headers: scopedHeaders(token, selectedWorkspaceId),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to disconnect YouTube');
+      toast.success('YouTube disconnected');
+      loadShortsSync();
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to disconnect YouTube');
+    } finally {
+      setDisconnectingYouTube(false);
+    }
+  };
+
+  const toggleShortsSync = async (enabled) => {
+    setSavingShortsSync(true);
+    try {
+      const res = await authFetch(router, '/api/shorts-sync', {
+        method: 'PUT',
+        headers: scopedHeaders(token, selectedWorkspaceId, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ enabled, privacyStatus: 'private', notifySubscribers: false }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (data.billing) showBillingBlocked(data);
+        throw new Error(data.error || 'Failed to update Shorts Sync');
+      }
+      setShortsSync(data);
+      toast.success(enabled ? 'Shorts Sync enabled' : 'Shorts Sync disabled');
+      loadBillingStatus();
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to update Shorts Sync');
+    } finally {
+      setSavingShortsSync(false);
+    }
+  };
+
+  const retryShortsRun = async (runId) => {
+    setRetryingShortsRunId(runId);
+    try {
+      const res = await authFetch(router, `/api/shorts-sync/runs/${runId}/retry`, {
+        method: 'POST',
+        headers: scopedHeaders(token, selectedWorkspaceId),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to queue retry');
+      toast.success('Retry queued');
+      loadShortsSync();
+    } catch (e) {
+      if (!isSessionExpiredError(e)) toast.error(e.message || 'Failed to queue retry');
+    } finally {
+      setRetryingShortsRunId('');
     }
   };
 
@@ -1662,6 +1913,20 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
+
+        <ShortsSyncPanel
+          state={shortsSync}
+          loading={loadingShortsSync}
+          workspaceActive={workspaceActive}
+          onConnectYouTube={connectYouTube}
+          onDisconnectYouTube={disconnectYouTube}
+          onToggle={toggleShortsSync}
+          onRetry={retryShortsRun}
+          connectingYouTube={connectingYouTube}
+          disconnectingYouTube={disconnectingYouTube}
+          saving={savingShortsSync}
+          retryingRunId={retryingShortsRunId}
+        />
 
         <section>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
