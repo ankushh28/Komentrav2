@@ -1101,11 +1101,11 @@ async function handleYouTubeCallback(req) {
   }
 }
 
-async function getShortsSyncContext(req, { requireActive = false } = {}) {
+async function getShortsSyncContext(req, { requireActive = false, ensureIndexes = false } = {}) {
   const u = getUserFromRequest(req);
   if (!u) return { error: json({ error: 'Unauthorized' }, 401) };
   const db = await getDb();
-  await ensureShortsSyncIndexes(db);
+  if (ensureIndexes) await ensureShortsSyncIndexes(db);
   const workspaceResult = await getWorkspaceForRequest(req, db, u.userId, { requireActive });
   if (workspaceResult.error) return { error: workspaceResult.error };
   const { planId, plan } = await getUserEntitlements(db, u.userId);
@@ -1183,7 +1183,7 @@ async function handleGetYouTubeChannel(req) {
 }
 
 async function handleDeleteYouTubeChannel(req) {
-  const ctx = await getShortsSyncContext(req, { requireActive: true });
+  const ctx = await getShortsSyncContext(req, { requireActive: true, ensureIndexes: true });
   if (ctx.error) return ctx.error;
   await Promise.all([
     ctx.db.collection('youtube_channels').deleteOne({ userId: ctx.user.userId, workspaceId: ctx.workspace._id }),
@@ -1196,13 +1196,18 @@ async function handleDeleteYouTubeChannel(req) {
 }
 
 async function handleGetShortsSync(req) {
-  const ctx = await getShortsSyncContext(req);
-  if (ctx.error) return ctx.error;
-  return json(await getShortsSyncState(ctx));
+  try {
+    const ctx = await getShortsSyncContext(req);
+    if (ctx.error) return ctx.error;
+    return json(await getShortsSyncState(ctx));
+  } catch (e) {
+    console.error('[shorts-sync] status failed', e?.message);
+    return json({ error: 'Unable to load Shorts Sync right now.' }, 500);
+  }
 }
 
 async function handleUpdateShortsSync(req) {
-  const ctx = await getShortsSyncContext(req, { requireActive: true });
+  const ctx = await getShortsSyncContext(req, { requireActive: true, ensureIndexes: true });
   if (ctx.error) return ctx.error;
   const { db, user, workspace, planId, plan } = ctx;
   const body = await req.json();
@@ -1279,7 +1284,7 @@ async function handleShortsSyncRuns(req) {
 }
 
 async function handleRetryShortsSyncRun(req, runId) {
-  const ctx = await getShortsSyncContext(req, { requireActive: true });
+  const ctx = await getShortsSyncContext(req, { requireActive: true, ensureIndexes: true });
   if (ctx.error) return ctx.error;
   const run = await ctx.db.collection('shorts_sync_runs').findOne({
     _id: runId,
