@@ -40,6 +40,7 @@ test('normalizes shorts sync settings defaults', () => {
   assert.deepEqual(normalizeShortsSyncSettings({ privacyStatus: 'public', enabled: true }).privacyStatus, 'public');
   assert.equal(normalizeShortsSyncSettings({ privacyStatus: 'friends' }).privacyStatus, 'private');
   assert.equal(normalizeShortsSyncSettings({}).metadataPolicy, 'smart_caption');
+  assert.equal(normalizeShortsSyncSettings(null).enabled, false);
 });
 
 test('creator and higher plans can use shorts sync', () => {

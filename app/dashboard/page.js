@@ -1086,6 +1086,7 @@ function statusLabel(status) {
 
 function ShortsSyncPanel({
   state,
+  fallbackInstagramAccount = null,
   loading,
   workspaceActive,
   onConnectYouTube,
@@ -1099,7 +1100,7 @@ function ShortsSyncPanel({
 }) {
   const settings = state?.settings || {};
   const channel = state?.youtubeChannel || null;
-  const instagram = state?.instagramAccount || null;
+  const instagram = state?.instagramAccount || fallbackInstagramAccount || null;
   const runs = state?.runs || [];
   const canUse = !!state?.entitlement?.canUse;
   const enabled = !!settings.enabled;
@@ -1430,11 +1431,12 @@ export default function DashboardPage() {
     } catch (e) { if (!isSessionExpiredError(e)) toast.error('Failed to load data'); }
   }, [token, selectedWorkspaceId, router]);
 
-  const loadShortsSync = useCallback(async () => {
-    if (!token || !selectedWorkspaceId) return;
+  const loadShortsSync = useCallback(async (workspaceIdOverride = '') => {
+    const workspaceId = workspaceIdOverride || selectedWorkspaceId;
+    if (!token || !workspaceId) return;
     setLoadingShortsSync(true);
     try {
-      const res = await authFetch(router, '/api/shorts-sync', { headers: scopedHeaders(token, selectedWorkspaceId) });
+      const res = await authFetch(router, '/api/shorts-sync', { headers: scopedHeaders(token, workspaceId) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to load Shorts Sync');
       setShortsSync(data);
@@ -1465,7 +1467,7 @@ export default function DashboardPage() {
 
   useEffect(() => { if (token) loadWorkspaces(); }, [loadWorkspaces, token]);
   useEffect(() => { if (token && selectedWorkspaceId) refresh(); }, [refresh, token, selectedWorkspaceId]);
-  useEffect(() => { if (token && selectedWorkspaceId) loadShortsSync(); }, [loadShortsSync, token, selectedWorkspaceId]);
+  useEffect(() => { if (token && selectedWorkspaceId) loadShortsSync(selectedWorkspaceId); }, [loadShortsSync, token, selectedWorkspaceId]);
   useEffect(() => { if (token) loadBillingStatus(); }, [loadBillingStatus, token]);
 
   useEffect(() => {
@@ -1477,9 +1479,9 @@ export default function DashboardPage() {
       setSelectedWorkspaceId(workspaceId);
     }
     if (automationId) setHighlightedAutomationId(automationId);
-    if (params.get('ig') === 'success') { toast.success('Instagram account connected!'); window.history.replaceState({}, '', '/dashboard'); loadWorkspaces(workspaceId || ''); refresh(); loadShortsSync(); }
+    if (params.get('ig') === 'success') { toast.success('Instagram account connected!'); window.history.replaceState({}, '', '/dashboard'); loadWorkspaces(workspaceId || ''); refresh(); loadShortsSync(workspaceId || selectedWorkspaceId); }
     else if (params.get('ig') === 'error') { toast.error('Connection failed: ' + (params.get('msg') || 'unknown')); window.history.replaceState({}, '', '/dashboard'); }
-    else if (params.get('yt') === 'success') { toast.success('YouTube channel connected!'); window.history.replaceState({}, '', '/dashboard'); loadShortsSync(); }
+    else if (params.get('yt') === 'success') { toast.success('YouTube channel connected!'); window.history.replaceState({}, '', '/dashboard'); loadShortsSync(workspaceId || selectedWorkspaceId); }
     else if (params.get('yt') === 'error') { toast.error('YouTube connection failed: ' + (params.get('msg') || 'unknown')); window.history.replaceState({}, '', '/dashboard'); }
   }, [loadWorkspaces, refresh, loadShortsSync]);
 
@@ -1917,6 +1919,7 @@ export default function DashboardPage() {
 
         <ShortsSyncPanel
           state={shortsSync}
+          fallbackInstagramAccount={currentAccount}
           loading={loadingShortsSync}
           workspaceActive={workspaceActive}
           onConnectYouTube={connectYouTube}
