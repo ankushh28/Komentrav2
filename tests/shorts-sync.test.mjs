@@ -4,6 +4,7 @@ import {
   buildShortsMetadata,
   canUseShortsSync,
   evaluateShortsEligibility,
+  isLikelyInstagramReel,
   normalizeShortsSyncSettings,
 } from '../lib/shorts-sync.js';
 import { decryptSecret, encryptSecret, hasTokenEncryptionKey } from '../lib/token-crypto.js';
@@ -34,6 +35,12 @@ test('evaluates shorts eligibility by duration and shape', () => {
   assert.equal(evaluateShortsEligibility({ durationSeconds: 181, width: 1080, height: 1920 }).code, 'duration_too_long');
   assert.equal(evaluateShortsEligibility({ durationSeconds: 60, width: 1920, height: 1080 }).code, 'not_square_or_vertical');
   assert.equal(evaluateShortsEligibility({ durationSeconds: 60, width: 0, height: 0 }).code, 'dimensions_unknown');
+});
+
+test('detects likely Instagram reels from media data', () => {
+  assert.equal(isLikelyInstagramReel({ media_product_type: 'REELS' }), true);
+  assert.equal(isLikelyInstagramReel({ permalink: 'https://instagram.com/reel/ABC/' }), true);
+  assert.equal(isLikelyInstagramReel({ media_product_type: 'FEED', permalink: 'https://instagram.com/p/ABC/' }), false);
 });
 
 test('normalizes shorts sync settings defaults', () => {

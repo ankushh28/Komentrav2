@@ -44,6 +44,7 @@ import {
   buildShortsMetadata,
   ensureShortsSyncIndexes,
   evaluateShortsEligibility,
+  isLikelyInstagramReel,
 } from './lib/shorts-sync.js';
 
 // Lightweight .env loader (avoids extra dep)

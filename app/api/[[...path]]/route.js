@@ -1048,10 +1048,10 @@ async function handleYouTubeCallback(req) {
   const state = url.searchParams.get('state');
   const errParam = url.searchParams.get('error');
   if (errParam) {
-    return NextResponse.redirect(`${BASE_URL}/dashboard?yt=error&msg=${encodeURIComponent(errParam)}`);
+    return NextResponse.redirect(`${BASE_URL}/shorts-sync?yt=error&msg=${encodeURIComponent(errParam)}`);
   }
   if (!code || !state) {
-    return NextResponse.redirect(`${BASE_URL}/dashboard?yt=error&msg=missing_code`);
+    return NextResponse.redirect(`${BASE_URL}/shorts-sync?yt=error&msg=missing_code`);
   }
 
   const db = await getDb();
@@ -1061,18 +1061,18 @@ async function handleYouTubeCallback(req) {
     expiresAt: { $gt: new Date() },
   });
   if (!stateRecord) {
-    return NextResponse.redirect(`${BASE_URL}/dashboard?yt=error&msg=invalid_state`);
+    return NextResponse.redirect(`${BASE_URL}/shorts-sync?yt=error&msg=invalid_state`);
   }
 
   const { userId, workspaceId } = stateRecord;
   try {
     const workspace = await db.collection('workspaces').findOne({ _id: workspaceId, ownerUserId: userId });
     if (!workspace || (workspace.status || 'active') !== 'active') {
-      return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&yt=error&msg=workspace_unavailable`);
+      return NextResponse.redirect(`${BASE_URL}/shorts-sync?workspaceId=${workspaceId}&yt=error&msg=workspace_unavailable`);
     }
     const tokens = await exchangeGoogleCode(code);
     if (!tokens.refresh_token) {
-      return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&yt=error&msg=${encodeURIComponent('Google did not return an offline refresh token. Disconnect and try again.')}`);
+      return NextResponse.redirect(`${BASE_URL}/shorts-sync?workspaceId=${workspaceId}&yt=error&msg=${encodeURIComponent('Google did not return an offline refresh token. Disconnect and try again.')}`);
     }
     const profile = await fetchYouTubeChannelProfile(tokens.access_token);
     const now = new Date();
@@ -1094,10 +1094,10 @@ async function handleYouTubeCallback(req) {
       },
       { upsert: true },
     );
-    return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&yt=success`);
+    return NextResponse.redirect(`${BASE_URL}/shorts-sync?workspaceId=${workspaceId}&yt=success`);
   } catch (e) {
     console.error('[youtube] OAuth callback failed', e?.message);
-    return NextResponse.redirect(`${BASE_URL}/dashboard?workspaceId=${workspaceId}&yt=error&msg=${encodeURIComponent(e.message || 'youtube_connection_failed')}`);
+    return NextResponse.redirect(`${BASE_URL}/shorts-sync?workspaceId=${workspaceId}&yt=error&msg=${encodeURIComponent(e.message || 'youtube_connection_failed')}`);
   }
 }
 
